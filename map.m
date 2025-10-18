@@ -3,7 +3,7 @@ classdef map < handle
         size
         UASTrail
         UASHead
-        UASSensed
+        UASkilled
         UASDestroyed
         assetDestroyed
         assets
@@ -29,12 +29,12 @@ classdef map < handle
         end
 
         % Initialize animation
-        function startAnimation(obj, AOR, assets, NFZs, sensors, hideClock)
+        function startAnimation(obj, AOR, assets, NFZs, effectors, hideClock)
             obj.displayMap
             
             obj.UASTrail = plot(NaN, NaN, 'Color', 'r', 'DisplayName', "UAS Trail");
             obj.UASHead = plot(NaN, NaN, 'Color', 'r', 'Marker', '^', 'DisplayName', "UAS");
-            obj.UASSensed = plot(NaN, NaN, 'Color', 'y', 'Marker', 'square', 'LineStyle', 'none', 'DisplayName', "UAS Sensor Detection Point");
+            obj.UASkilled = plot(NaN, NaN, 'Color', 'y', 'Marker', 'square', 'LineStyle', 'none', 'DisplayName', "UAS Sensor Detection Point");
             obj.UASDestroyed = plot(NaN, NaN, 'Marker', 'x', 'Color', 'g', 'MarkerSize', 12);
             obj.assetDestroyed = plot(NaN, NaN, 'Marker', 'x', 'Color', 'r', 'MarkerSize', 20, 'LineWidth', 2, 'DisplayName', "Asset Destroyed");
 
@@ -62,11 +62,11 @@ classdef map < handle
                     end
                 end
 
-                % Plot sensors
-                for i = 1:length(sensors)
-                    x = sensors(i).location(1);
-                    y = sensors(i).location(2);
-                    r = sensors(i).range;
+                % Plot effectors
+                for i = 1:length(effectors)
+                    x = effectors(i).location(1);
+                    y = effectors(i).location(2);
+                    r = effectors(i).range;
 
                     rectangle('Position',[x-r, y-r, 2*r, 2*r], ...
                         'Curvature', [1 1], ...
@@ -83,13 +83,14 @@ classdef map < handle
             xlim([0,obj.size.horiz])
             ylim([0,obj.size.vert])
         end
+
         function updateUASAnimation(obj, UASPos)
             set(obj.UASTrail, 'XData', UASPos(:, 1), 'YData', UASPos(:, 2))
             set(obj.UASHead, 'XData', UASPos(end, 1), 'YData', UASPos(end, 2))
         end
 
-        function updateSensedLocations(obj, sensedPos)
-            set(obj.UASSensed, 'XData', sensedPos(:, 1), 'YData', sensedPos(:, 2))
+        function updatekilledLocations(obj, killedPos)
+            set(obj.UASkilled, 'XData', killedPos(:, 1), 'YData', killedPos(:, 2))
         end
 
         function animateDestroyedAssets(obj, assets, destroyedAssets)

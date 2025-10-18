@@ -32,5 +32,3 @@ function sensorLocations = sensorPosnsGenerator(sensorResolution, mapSize, numSe
         sensorLocations(i,:) = reshape(chosenPoints.', 1, []);  
     end
 end
-
-  
