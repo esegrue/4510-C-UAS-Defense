@@ -8,6 +8,7 @@ classdef simulator
         AOR
         UAS
         effectors
+        sensors
         assets
         tick
         dt
@@ -20,13 +21,14 @@ classdef simulator
     end
 
     methods
-        function obj = simulator(map, aor, uas, effectors, assets, options)
+        function obj = simulator(map, aor, uas, effectors, sensors, assets, options)
             %SIMULATOR
             arguments
                 map
                 aor
                 uas
                 effectors
+                sensors
                 assets
                 options.tps double = 20                                     % How many ticks per second the logical system should operate in, AKA: simulation resolution
                 options.animate logical = true                              % Set false if you just want data
@@ -39,6 +41,7 @@ classdef simulator
             obj.AOR = aor;
             obj.UAS = uas;
             obj.effectors = effectors;
+            obj.sensors = sensors;
             obj.assets = assets;
             obj.tick = 0;
             obj.tps = options.tps;
@@ -56,6 +59,7 @@ classdef simulator
             UASkilled = 0;                                                  % Initialize UAS killed count
             NFZEntered = false;                                             % Initialize NFZ entry status
             lastTick = false;                                               % Initialize lastTick to be set true when simulation should end
+            UASsensedPos = [];
             UASkilledPos = [];                                              % Initialize matrix to track all positions in which the UAS is killed
             UASPos = [obj.UAS.position(1), obj.UAS.position(2)];            % This matrix tracks all current and previous UAS positions
             
@@ -63,7 +67,7 @@ classdef simulator
                 if obj.resetGraphics
                     obj.map.wipeAnimation()
                 end
-                obj.map.startAnimation(obj.AOR, obj.assets, obj.NFZs, obj.effectors, obj.hideClock);
+                obj.map.startAnimation(obj.AOR, obj.assets, obj.NFZs, obj.effectors, obj.sensors, obj.hideClock);
             end
 % <<<<<<< Updated upstream
 % 
@@ -92,17 +96,25 @@ classdef simulator
 
                 % Check for any logical events
                 [eventEffector] = obj.checkEffectorCollision(UASPos(end, :));
+                [eventSensor] = obj.checkSensorCollision(UASPos(end, :));                
                 [eventAsset,  asset] = obj.checkAssetCollision(UASPos(end, :), obj.UAS.speed*obj.dt);
                 [eventNFZ] = obj.checkNFZCollision(UASPos(end, :));
                 [eventExitBounds] = obj.checkOutOfBounds(UASPos(end, :), obj.map.size);
-                
+
+                if eventSensor == 1
+                    UASsensedPos = cat(1, UASsensedPos, [obj.tick*obj.tps/60, UASPos(end, :)]);
+                    UASsensed = 1;
+                    if obj.animate
+                        obj.map.animateUASsensed(UASPos(end,:))
+                    end
+                end
 
                 if eventEffector == 1 % UAS killed
                     UASkilledPos = cat(1, UASkilledPos, [obj.tick*obj.tps/60, UASPos(end, :)]);
                     UASkilled = 1;
                     cost = cost + 100; % cost to use effector
                     if obj.animate
-                        obj.map.animateUASDestroyed(UASPos(end, :))
+                        obj.map.animateUASkilled(UASPos(end, :))
                         %obj.map.updatekilledLocations(UASkilledPos(:, 2:3))
                     end
                     lastTick = true;
@@ -121,7 +133,7 @@ classdef simulator
 
                 if eventNFZ == 1 % UAS entered NFZ
                     if obj.animate
-                        obj.map.animateUASDestroyed(UASPos(end, :))
+                        obj.map.animateUASkilled(UASPos(end, :))
                     end
                     NFZEntered = true;
                     lastTick = true;
@@ -159,6 +171,21 @@ classdef simulator
             results.UASkilledPos = UASkilledPos;
             results.NFZEntered = NFZEntered; % Initialize NFZ entry status
             results.tick = obj.tick;
+        end
+
+        function [event, sensors] = checkSensorCollision(obj, pos)
+            % Sensor collision detection
+            event = 0;
+            sensors = 0;
+
+            for i = 1:length(obj.sensors)
+                r = [pos(1), pos(2)] - obj.sensors(i).location;
+                if norm(r) <= obj.sensors(i).range
+                    event = 1;
+                    sensors = i;
+                    return;
+                end
+            end
         end
 
         function [event, effectors] = checkEffectorCollision(obj, pos)
