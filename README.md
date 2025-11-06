@@ -1,4 +1,4 @@
-Team 2 C-UAS Defense Study
+Team 3 C-UAS Sensor Placement
 
 AEROENG 4510 Senior Capstone
 
@@ -6,6 +6,4 @@ The Ohio State University
 
 Autumn Semester, 2025
 
-Identify ideal effector placement to neutralize adversarial UAS drones in a designated AOR
-
-Instructions: Download all of the files in main, run in TestingInterface.m
+Identify ideal sensor placement to detect adversarial UAS drones in a designated AOR
