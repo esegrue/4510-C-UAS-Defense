@@ -68,7 +68,6 @@ classdef UAS < handle
                 obj.targetUnitVector = (targetPt - obj.position) / norm(targetPt - obj.position);
                 obj.position = obj.position + obj.speed*time*obj.targetUnitVector;
             end
-            temp = obj.position
         end
 
         function obj = searchMotion(obj,time,assets,destroyedAssets,NFZs)
