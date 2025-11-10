@@ -12,6 +12,12 @@ classdef UAS < handle
         totalAssets
         tempSpeed
 
+
+        pathPoints
+        currentWaypoint
+        planner
+        heading
+
     end
 
     methods
@@ -23,11 +29,47 @@ classdef UAS < handle
             obj.tempSpeed = speed;
             obj.targetUnitVector = (obj.target - obj.position)/norm(obj.target - obj.position);
 
+            obj.pathPoints = [];
+            obj.currentWaypoint = 1;
+            obj.planner = [];
+            obj.heading = atan2(obj.targetUnitVector(2), obj.targetUnitVector(1));
+
         end
 
         function obj = linearMotion(obj,time)
             obj.position = obj.position + obj.speed*time*obj.targetUnitVector;
 
+        end
+
+        function obj = hybridAStarMotion(obj, time, turnRadius, costMap)
+            % Plan path on first call
+            if isempty(obj.planner)
+                ss = stateSpaceSE2;
+                ss.StateBounds = [costMap.XWorldLimits; costMap.YWorldLimits; -pi pi];
+                sv = validatorOccupancyMap(ss);
+                sv.Map = costMap;
+                obj.planner = plannerHybridAStar(sv, 'MinTurningRadius', turnRadius);
+                % Plan initial path
+                refPath = plan(obj.planner, [obj.position, obj.heading], [obj.target, 0]);
+                obj.pathPoints = refPath.States(:, 1:2);  % Just x,y coordinates
+            end
+            
+            % Follow path
+            if obj.currentWaypoint <= size(obj.pathPoints, 1)
+                targetPt = obj.pathPoints(obj.currentWaypoint, :);
+                
+                % Move to next waypoint if close
+                if norm(obj.position - targetPt) < 2.0
+                    obj.currentWaypoint = obj.currentWaypoint + 1;
+                    if obj.currentWaypoint <= size(obj.pathPoints, 1)
+                        targetPt = obj.pathPoints(obj.currentWaypoint, :);
+                    end
+                end
+                
+                % Update direction and position
+                obj.targetUnitVector = (targetPt - obj.position) / norm(targetPt - obj.position);
+                obj.position = obj.position + obj.speed*time*obj.targetUnitVector;
+            end
         end
 
         function obj = searchMotion(obj,time,assets,destroyedAssets,NFZs)
