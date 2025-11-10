@@ -41,7 +41,7 @@ while runs <= maxRuns
     effector1 = effector([effectorLocations(i, 1), effectorLocations(i, 2)], effectorRange);   % create effector object(s) in effector.m:  ([x, y], range)
     effector2 = effector([effectorLocations(i, 3), effectorLocations(i, 4)], effectorRange);
     parfor j = 1:num_tests                                         % run sim for every UAS entrance location and record kill/nokill/NFZincursion in results vector                                           
-        sim = simulator(map, AOR, UAS(15, entrances(j, :), asset1.location, 'Linear'), [effector1, effector2], [sensor1, sensor2], [asset1], tps=20, animate=false, nfzs=NFZ1, resetGraphics=true, animationMultiplier=100);
+        sim = simulator(map, AOR, UAS(15, entrances(j, :), asset1.location, 'HybridAStar'), [effector1, effector2], [sensor1, sensor2], [asset1], tps=20, animate=true, nfzs=NFZ1, resetGraphics=true, animationMultiplier=100);
         myResults(j) = sim.runSim.cost();
     end
     CostperCombo(i) = sum(myResults, 'all')/num_tests; % estimated cost

@@ -89,7 +89,7 @@ classdef simulator
                         obj.UAS.searchMotion(obj.dt,obj.assets, destroyedAssets);
 
                     elseif obj.UAS.mode == "HybridAStar"
-                        obj.UAS.hybridAStarMotion(obj.dt, 5.0, obj.map.occupancyMap);
+                        obj.UAS.hybridAStarMotion(obj.dt, 3.0, obj.map.occupancyMap);
                     else
                         error("Improperly defined UAS mode. Simulation terminating.") % Move this check and error to UAS initialization???
                     end

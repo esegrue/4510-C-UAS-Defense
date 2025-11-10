@@ -42,7 +42,6 @@ classdef UAS < handle
         end
 
         function obj = hybridAStarMotion(obj, time, turnRadius, costMap)
-            % Plan path on first call
             if isempty(obj.planner)
                 ss = stateSpaceSE2;
                 ss.StateBounds = [costMap.XWorldLimits; costMap.YWorldLimits; -pi pi];
@@ -52,13 +51,13 @@ classdef UAS < handle
                 % Plan initial path
                 refPath = plan(obj.planner, [obj.position, obj.heading], [obj.target, 0]);
                 obj.pathPoints = refPath.States(:, 1:2);  % Just x,y coordinates
+                pts = refPath.States; % [x y theta]
+                plot(pts(:,1), pts(:,2), 'g--', 'LineWidth', 2);
             end
             
-            % Follow path
             if obj.currentWaypoint <= size(obj.pathPoints, 1)
                 targetPt = obj.pathPoints(obj.currentWaypoint, :);
                 
-                % Move to next waypoint if close
                 if norm(obj.position - targetPt) < 2.0
                     obj.currentWaypoint = obj.currentWaypoint + 1;
                     if obj.currentWaypoint <= size(obj.pathPoints, 1)
@@ -66,10 +65,10 @@ classdef UAS < handle
                     end
                 end
                 
-                % Update direction and position
                 obj.targetUnitVector = (targetPt - obj.position) / norm(targetPt - obj.position);
                 obj.position = obj.position + obj.speed*time*obj.targetUnitVector;
             end
+            temp = obj.position
         end
 
         function obj = searchMotion(obj,time,assets,destroyedAssets,NFZs)

@@ -18,11 +18,7 @@ classdef map < handle
             obj.size.horiz = horizontal;
             obj.costMap = zeros(vertical, horizontal);
 
-            for i = 1:length(obj.NFZs)
-                [xtemp, ytemp] = meshgrid(1:obj.size.horiz, 1:obj.size.vert);
-                obj.costMap(isinterior(obj.NFZs(i), xtemp(:), ytemp(:))) = 1;
-            end
-            obj.occupancyMap = binaryOccupancyMap(obj.costMap);
+
             
         end
 
@@ -40,7 +36,12 @@ classdef map < handle
         % Initialize animation
         function startAnimation(obj, AOR, assets, NFZs, effectors, sensors, hideClock)
             obj.displayMap
-            
+            for i = 1:length(NFZs)
+                [xtemp, ytemp] = meshgrid(1:obj.size.horiz, 1:obj.size.vert);
+                obj.costMap(isinterior(NFZs(i), xtemp(:), ytemp(:))) = 1;
+                
+            end
+            obj.occupancyMap = binaryOccupancyMap(flipud(obj.costMap));
             obj.UASTrail = plot(NaN, NaN, 'Color', 'r', 'DisplayName', "UAS Trail");
             obj.UASHead = plot(NaN, NaN, 'Color', 'r', 'Marker', '^', 'DisplayName', "UAS");
             obj.UASsensed = plot(NaN, NaN, 'Color', 'k', 'Marker', 'o', 'LineStyle', 'none', 'DisplayName', "UAS Sensor Detection Point");
@@ -69,6 +70,9 @@ classdef map < handle
                     for i = 1:length(NFZs)
                         obj.NFZs = plot(NFZs(i), 'FaceColor', 'y', 'FaceAlpha', 0.2, 'EdgeColor', 'y', 'DisplayName', "NFZ " + i);
                     end
+                    show(obj.occupancyMap)
+                    axis xy
+                    alpha(0.5)
                 end
 
                 % Plot effectors
@@ -79,24 +83,23 @@ classdef map < handle
 
                     rectangle('Position',[x-r, y-r, 2*r, 2*r], ...
                         'Curvature', [1 1], ...
-                        'FaceColor', 'c', ...
+                        'FaceColor', 'none', ...
                         'EdgeColor', 'c', ...
                         'LineStyle', '--')
                     plot(x, y, '.', 'Color', 'c', 'DisplayName', "Sensor " + i, 'MarkerSize', 20)
                 end
                 
                 % Plot sensors
-                for i = 1:length(effectors)
+                for i = 1:length(sensors)
                     x = sensors(i).location(1);
                     y = sensors(i).location(2);
                     r = sensors(i).range;
 
                     rectangle('Position',[x-r, y-r, 2*r, 2*r], ...
                         'Curvature', [1 1], ...
-                        'FaceColor', 'm', ...
+                        'FaceColor', 'none', ...
                         'EdgeColor', 'm', ...
-                        'LineStyle', '--', ...
-                        'FaceAlpha', 0.05)
+                        'LineStyle', '--')
                     plot(x, y, '.', 'Color', 'm', 'DisplayName', "Sensor " + i, 'MarkerSize', 20)
                 end
             end
