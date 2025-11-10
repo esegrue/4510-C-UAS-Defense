@@ -1,4 +1,4 @@
-classdef sensor
+classdef sensors
     %SENSOR Class for sensors
     %   Detailed explanation goes here
 
@@ -8,7 +8,7 @@ classdef sensor
     end
 
     methods
-        function obj = sensor(location, range)
+        function obj = sensors(location, range)
             %SENSOR Construct an instance of this class
             %   Detailed explanation goes here
             obj.location = location;
