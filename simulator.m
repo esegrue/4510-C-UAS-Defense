@@ -57,6 +57,7 @@ classdef simulator
             destroyedAssets = [];                                           % Initialize assets destroyed
             cost = 0;
             UASkilled = 0;                                                  % Initialize UAS killed count
+            UASsensed = 0;
             NFZEntered = false;                                             % Initialize NFZ entry status
             lastTick = false;                                               % Initialize lastTick to be set true when simulation should end
             UASsensedPos = [];
@@ -95,8 +96,8 @@ classdef simulator
                 end
 
                 % Check for any logical events
-                [eventEffector] = obj.checkEffectorCollision(UASPos(end, :));
-                [eventSensor] = obj.checkSensorCollision(UASPos(end, :));                
+                [eventSensor] = obj.checkSensorCollision(UASPos(end, :));   
+                [eventEffector] = obj.checkEffectorCollision(UASPos(end, :), eventSensor);
                 [eventAsset,  asset] = obj.checkAssetCollision(UASPos(end, :), obj.UAS.speed*obj.dt);
                 [eventNFZ] = obj.checkNFZCollision(UASPos(end, :));
                 [eventExitBounds] = obj.checkOutOfBounds(UASPos(end, :), obj.map.size);
@@ -105,7 +106,7 @@ classdef simulator
                     UASsensedPos = cat(1, UASsensedPos, [obj.tick*obj.tps/60, UASPos(end, :)]);
                     UASsensed = 1;
                     if obj.animate
-                        obj.map.animateUASsensed(UASPos(end,:))
+                        obj.map.animateUASsensed(UASsensedPos)
                     end
                 end
 
@@ -188,17 +189,19 @@ classdef simulator
             end
         end
 
-        function [event, effectors] = checkEffectorCollision(obj, pos)
+        function [event, effectors] = checkEffectorCollision(obj, pos, eventSensor)
             % Effector collision detection
             event = 0; % Initialize event to no collision
             effectors = 0; % Initialize effectors index
-
-            for i = 1:length(obj.effectors)
-                r = [pos(1), pos(2)] - obj.effectors(i).location;
-                if norm(r) <= obj.effectors(i).range
-                    event = 1; % Collision detected
-                    effectors = i; % Store the index of the colliding effectors
-                    return; % Exit the function early
+            
+            if eventSensor
+                for i = 1:length(obj.effectors)
+                    r = [pos(1), pos(2)] - obj.effectors(i).location;
+                    if norm(r) <= obj.effectors(i).range
+                        event = 1; % Collision detected
+                        effectors = i; % Store the index of the colliding effectors
+                        return; % Exit the function early
+                    end
                 end
             end
         end

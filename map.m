@@ -118,7 +118,7 @@ classdef map < handle
         end
 
         function animateUASsensed(obj, position)
-            set(obj.UASsensed, 'XData', position(1), 'YData', position(2))
+            set(obj.UASsensed, 'XData', position(:,2), 'YData', position(:,3))
         end
 
         function animateUASkilled(obj, position)
