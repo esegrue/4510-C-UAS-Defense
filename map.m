@@ -3,17 +3,27 @@ classdef map < handle
         size
         UASTrail
         UASHead
-        UASsensed
         UASkilled
+        UASDestroyed
         assetDestroyed
         assets
         NFZs
         timeBox
+        costMap
+        occupancyMap
     end
     methods
         function obj = map(vertical, horizontal)
             obj.size.vert = vertical;
             obj.size.horiz = horizontal;
+            obj.costMap = zeros(vertical, horizontal);
+
+            for i = 1:length(obj.NFZs)
+                [xtemp, ytemp] = meshgrid(1:obj.size.horiz, 1:obj.size.vert);
+                obj.costMap(isinterior(obj.NFZs(i), xtemp(:), ytemp(:))) = 1;
+            end
+            obj.occupancyMap = binaryOccupancyMap(obj.costMap);
+            
         end
 
         function displayMap(obj) % Display the initial map size and labels
@@ -28,13 +38,13 @@ classdef map < handle
         end
 
         % Initialize animation
-        function startAnimation(obj, AOR, assets, NFZs, effectors, sensors, hideClock)
+        function startAnimation(obj, AOR, assets, NFZs, effectors, hideClock)
             obj.displayMap
             
             obj.UASTrail = plot(NaN, NaN, 'Color', 'r', 'DisplayName', "UAS Trail");
             obj.UASHead = plot(NaN, NaN, 'Color', 'r', 'Marker', '^', 'DisplayName', "UAS");
-            obj.UASsensed = plot(NaN, NaN, 'Color', 'k', 'Marker', 'o', 'LineStyle', 'none', 'DisplayName', "UAS Sensor Detection Point");
-            obj.UASkilled = plot(NaN, NaN, 'Marker', 'x', 'Color', 'g', 'MarkerSize', 12);
+            obj.UASkilled = plot(NaN, NaN, 'Color', 'y', 'Marker', 'square', 'LineStyle', 'none', 'DisplayName', "UAS Sensor Detection Point");
+            obj.UASDestroyed = plot(NaN, NaN, 'Marker', 'x', 'Color', 'g', 'MarkerSize', 12);
             obj.assetDestroyed = plot(NaN, NaN, 'Marker', 'x', 'Color', 'r', 'MarkerSize', 20, 'LineWidth', 2, 'DisplayName', "Asset Destroyed");
 
             % Determine if plot has already been initialized
@@ -71,24 +81,8 @@ classdef map < handle
                         'Curvature', [1 1], ...
                         'FaceColor', 'c', ...
                         'EdgeColor', 'c', ...
-                        'LineStyle', '--', ...
-                        'FaceAlpha', 0.05)
+                        'LineStyle', '--')
                     plot(x, y, '.', 'Color', 'c', 'DisplayName', "Sensor " + i, 'MarkerSize', 20)
-                end
-                
-                % Plot sensors
-                for i = 1:length(effectors)
-                    x = sensors(i).location(1);
-                    y = sensors(i).location(2);
-                    r = sensors(i).range;
-
-                    rectangle('Position',[x-r, y-r, 2*r, 2*r], ...
-                        'Curvature', [1 1], ...
-                        'FaceColor', 'm', ...
-                        'EdgeColor', 'm', ...
-                        'LineStyle', '--', ...
-                        'FaceAlpha', 0.05)
-                    plot(x, y, '.', 'Color', 'm', 'DisplayName', "Sensor " + i, 'MarkerSize', 20)
                 end
             end
 
@@ -117,12 +111,8 @@ classdef map < handle
             set(obj.assetDestroyed, 'XData', XData, 'YData', YData)
         end
 
-        function animateUASsensed(obj, position)
-            set(obj.UASsensed, 'XData', position(:,2), 'YData', position(:,3))
-        end
-
-        function animateUASkilled(obj, position)
-            set(obj.UASkilled, 'XData', position(1), 'YData', position(2))
+        function animateUASDestroyed(obj, position)
+            set(obj.UASDestroyed, 'XData', position(1), 'YData', position(2))
         end
 
         function updateClock(obj, time)
