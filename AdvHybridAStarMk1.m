@@ -1,18 +1,22 @@
 clc
 clear
 %%map setup
-costmap = ones(100,100); % start with everything high cost
+costmap = zeros(100,100); % start with everything high cost
 costmap(5:95, 5:95) = 0; % carve out navigable region
 numObstacles = 100; % number of random obstacles
 obsSize = 5; % approximate side length of each obstacle (cells)
 mapSize = size(costmap,1)
-for i = 1:numObstacles
-% pick a random upper-left corner inside the inner safe zone
-x = randi([11, mapSize - obsSize - 5]);
-y = randi([11, mapSize - obsSize - 5]);
-% place a square obstacle block
-costmap(y:y+obsSize, x:x+obsSize) = 1;
-end
+[X, Y] = meshgrid(1:mapSize, 1:mapSize)
+% for i = 1:numObstacles
+% % pick a random upper-left corner inside the inner safe zone
+% x = randi([11, mapSize - obsSize - 5]);
+% y = randi([11, mapSize - obsSize - 5]);
+% % place a square obstacle block
+% costmap(y:y+obsSize, x:x+obsSize) = 1;
+% end
+NFZ1 = polyshape([8, 25, 42, 44, 12], [91, 72, 89, 66, 70]);
+inPoints = isinterior(NFZ1,X(:), Y(:))
+costmap(inPoints) = 1;
 goal = [90, 90, 0]; % x, y, yaw in world coords
 imin = 5;
 imax = 20;

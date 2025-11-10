@@ -9,11 +9,14 @@ classdef map < handle
         assets
         NFZs
         timeBox
+        costMap
+        occupancyMap
     end
     methods
         function obj = map(vertical, horizontal)
             obj.size.vert = vertical;
             obj.size.horiz = horizontal;
+            obj.costMap = zeros(vertical, horizontal);
             
         end
 
@@ -58,8 +61,16 @@ classdef map < handle
                 % Plot NFZs
                 if isempty(NFZs) == 0
                     for i = 1:length(NFZs)
+                        [xtemp, ytemp] = meshgrid(1:obj.size.horiz, 1:obj.size.vert);
                         obj.NFZs = plot(NFZs(i), 'FaceColor', 'y', 'FaceAlpha', 0.2, 'EdgeColor', 'y', 'DisplayName', "NFZ " + i);
+                        hold on
+                        obj.costMap(isinterior(NFZs(i), xtemp(:), ytemp(:))) = 1;
+
                     end
+                    obj.occupancyMap = binaryOccupancyMap(obj.costMap);
+                    hold on
+                    show(obj.occupancyMap, "grid")
+                    alpha(0.5)
                 end
 
                 % Plot effectors
@@ -72,8 +83,7 @@ classdef map < handle
                         'Curvature', [1 1], ...
                         'FaceColor', 'c', ...
                         'EdgeColor', 'c', ...
-                        'LineStyle', '--', ...
-                        'FaceAlpha', 0.05)
+                        'LineStyle', '--')
                     plot(x, y, '.', 'Color', 'c', 'DisplayName', "Sensor " + i, 'MarkerSize', 20)
                 end
             end
