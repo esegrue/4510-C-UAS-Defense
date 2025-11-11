@@ -38,7 +38,8 @@ classdef map < handle
             obj.displayMap
             for i = 1:length(NFZs)
                 [xtemp, ytemp] = meshgrid(1:obj.size.horiz, 1:obj.size.vert);
-                obj.costMap(isinterior(NFZs(i), xtemp(:), ytemp(:))) = 1;
+                [TFIn, TFOn] = isinterior(polybuffer(NFZs(i), 1), xtemp(:), ytemp(:));
+                obj.costMap(TFIn) = 1;
                 
             end
             obj.occupancyMap = binaryOccupancyMap(flipud(obj.costMap));
