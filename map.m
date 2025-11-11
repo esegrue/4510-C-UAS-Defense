@@ -70,9 +70,7 @@ classdef map < handle
                     for i = 1:length(NFZs)
                         obj.NFZs = plot(NFZs(i), 'FaceColor', 'y', 'FaceAlpha', 0.2, 'EdgeColor', 'y', 'DisplayName', "NFZ " + i);
                     end
-                    show(obj.occupancyMap)
-                    axis xy
-                    alpha(0.5)
+
                 end
 
                 % Plot effectors

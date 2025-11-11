@@ -14,7 +14,8 @@ classdef UAS < handle
 
 
         pathPoints
-        currentWaypoint
+        pathHeadings
+        tickOffset
         planner
         heading
 
@@ -30,7 +31,7 @@ classdef UAS < handle
             obj.targetUnitVector = (obj.target - obj.position)/norm(obj.target - obj.position);
 
             obj.pathPoints = [];
-            obj.currentWaypoint = 1;
+            obj.tickOffset = 0;
             obj.planner = [];
             obj.heading = atan2(obj.targetUnitVector(2), obj.targetUnitVector(1));
 
@@ -41,33 +42,38 @@ classdef UAS < handle
 
         end
 
-        function obj = hybridAStarMotion(obj, time, turnRadius, costMap)
+        function obj = hybridAStarMotion(obj, time, tick, turnRadius, costMap)
             if isempty(obj.planner)
                 ss = stateSpaceSE2;
                 ss.StateBounds = [costMap.XWorldLimits; costMap.YWorldLimits; -pi pi];
                 sv = validatorOccupancyMap(ss);
                 sv.Map = costMap;
-                obj.planner = plannerHybridAStar(sv, 'MinTurningRadius', turnRadius);
+                obj.planner = plannerHybridAStar(sv, 'MinTurningRadius', turnRadius, 'ReverseCost', 100000, 'DirectionSwitchingCost', 100000, "InterpolationDistance",obj.speed*time);
                 % Plan initial path
                 refPath = plan(obj.planner, [obj.position, obj.heading], [obj.target, 0]);
                 obj.pathPoints = refPath.States(:, 1:2);  % Just x,y coordinates
+                obj.pathHeadings = refPath.States(:,3);
+                pts = refPath.States; % [x y theta]
+            end
+
+
+
+            if (tick - obj.tickOffset) <= length(obj.pathPoints(:,1))
+                pose = obj.pathPoints(tick - obj.tickOffset,:);
+                obj.position = pose;
+                obj.heading = obj.pathHeadings(tick - obj.tickOffset);
+            else %reached end of path, now escape
+                posEsc = [costMap.XWorldLimits(1), obj.position(2); obj.position(1), costMap.YWorldLimits(1); costMap.XWorldLimits(2), obj.position(2); obj.position(1), costMap.YWorldLimits(2)];
+                [~, Iesc] = min(sum(posEsc - obj.position, 2), [], "ComparisonMethod", "abs");
+                obj.target = posEsc(Iesc, :);
+                refPath = plan(obj.planner, [obj.position, obj.heading], [obj.target, obj.heading]);
+                obj.pathPoints = refPath.States(:, 1:2);  % Just x,y coordinates
                 pts = refPath.States; % [x y theta]
                 plot(pts(:,1), pts(:,2), 'g--', 'LineWidth', 2);
+                obj.tickOffset = tick - 1;
+                obj.position = obj.pathPoints(tick - obj.tickOffset,:);
             end
-            
-            if obj.currentWaypoint <= size(obj.pathPoints, 1)
-                targetPt = obj.pathPoints(obj.currentWaypoint, :);
-                
-                if norm(obj.position - targetPt) < 2.0
-                    obj.currentWaypoint = obj.currentWaypoint + 1;
-                    if obj.currentWaypoint <= size(obj.pathPoints, 1)
-                        targetPt = obj.pathPoints(obj.currentWaypoint, :);
-                    end
-                end
-                
-                obj.targetUnitVector = (targetPt - obj.position) / norm(targetPt - obj.position);
-                obj.position = obj.position + obj.speed*time*obj.targetUnitVector;
-            end
+            obj.position
         end
 
         function obj = searchMotion(obj,time,assets,destroyedAssets,NFZs)
