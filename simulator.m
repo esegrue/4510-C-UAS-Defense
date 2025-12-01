@@ -7,6 +7,7 @@ classdef simulator
         map
         AOR
         UAS
+        UASPos_all
         effectors
         sensors
         assets
@@ -18,6 +19,7 @@ classdef simulator
         resetGraphics
         animationMultiplier
         hideClock
+        cost
     end
 
     methods
@@ -62,7 +64,7 @@ classdef simulator
             lastTick = false;                                               % Initialize lastTick to be set true when simulation should end
             UASsensedPos = [];
             UASkilledPos = [];                                              % Initialize matrix to track all positions in which the UAS is killed
-            UASPos = [obj.UAS.position(1), obj.UAS.position(2)];            % This matrix tracks all current and previous UAS positions
+            UASPos_all = [obj.UAS.position(1), obj.UAS.position(2)];            % This matrix tracks all current and previous UAS positions
             
             if obj.animate == true
                 if obj.resetGraphics
@@ -70,15 +72,11 @@ classdef simulator
                 end
                 obj.map.startAnimation(obj.AOR, obj.assets, obj.NFZs, obj.effectors, obj.sensors, obj.hideClock);
             end
-% <<<<<<< Updated upstream
-% 
-% =======
-% 
-% >>>>>>> Stashed changes
-            % Generate Effector Contours
-            for i = 1:length(obj.effectors)
-                
-            end
+
+            req_pings = obj.sensors(1).params.pings;
+            window_duration = obj.sensors(1).params.duration;
+            window_ticks = ceil(window_duration/obj.dt);
+            track_hist = zeros([1 window_ticks]);
 
             while lastTick == false
                 if obj.tick ~= 0
@@ -92,18 +90,20 @@ classdef simulator
                     end
 
                     % Update local UASPos
-                    UASPos = cat(1, UASPos, obj.UAS.position);
+                    UASPos_all = cat(1, UASPos_all, obj.UAS.position);
                 end
+                UASPos = UASPos_all(end,:);
+
 
                 % Check for any logical events
-                [eventSensor] = obj.checkSensorCollision(UASPos(end, :));   
-                [eventEffector] = obj.checkEffectorCollision(UASPos(end, :), eventSensor);
-                [eventAsset,  asset] = obj.checkAssetCollision(UASPos(end, :), obj.UAS.speed*obj.dt);
-                [eventNFZ] = obj.checkNFZCollision(UASPos(end, :));
-                [eventExitBounds] = obj.checkOutOfBounds(UASPos(end, :), obj.map.size);
+                [eventSensor, ~, ~, track_hist] = obj.checkSensorCollision(UASPos, track_hist);   
+                [eventEffector] = obj.checkEffectorCollision(UASPos, eventSensor);
+                [eventAsset,  asset] = obj.checkAssetCollision(UASPos, obj.UAS.speed*obj.dt);
+                [eventNFZ] = obj.checkNFZCollision(UASPos);
+                [eventExitBounds] = obj.checkOutOfBounds(UASPos, obj.map.size);
 
                 if eventSensor == 1
-                    UASsensedPos = cat(1, UASsensedPos, [obj.tick*obj.tps/60, UASPos(end, :)]);
+                    UASsensedPos = cat(1, UASsensedPos, [obj.tick*obj.tps/60, UASPos]);
                     UASsensed = 1;
                     if obj.animate
                         obj.map.animateUASsensed(UASsensedPos)
@@ -111,11 +111,11 @@ classdef simulator
                 end
 
                 if eventEffector == 1 % UAS killed
-                    UASkilledPos = cat(1, UASkilledPos, [obj.tick*obj.tps/60, UASPos(end, :)]);
+                    UASkilledPos = cat(1, UASkilledPos, [obj.tick*obj.tps/60, UASPos]);
                     UASkilled = 1;
                     cost = cost + 100; % cost to use effector
                     if obj.animate
-                        obj.map.animateUASkilled(UASPos(end, :))
+                        obj.map.animateUASkilled(UASPos)
                         %obj.map.updatekilledLocations(UASkilledPos(:, 2:3))
                     end
                     lastTick = true;
@@ -134,7 +134,7 @@ classdef simulator
 
                 if eventNFZ == 1 % UAS entered NFZ
                     if obj.animate
-                        obj.map.animateUASkilled(UASPos(end, :))
+                        obj.map.animateUASkilled(UASPos)
                     end
                     NFZEntered = true;
                     lastTick = true;
@@ -151,7 +151,7 @@ classdef simulator
                 % Update Animation
                 if obj.animate
                     pause(obj.dt/obj.animationMultiplier)
-                    obj.map.updateUASAnimation(UASPos)
+                    obj.map.updateUASAnimation(UASPos_all)
                     if obj.hideClock == false
                         time = obj.tick/obj.tps;
                         obj.map.updateClock(time)
@@ -165,7 +165,7 @@ classdef simulator
             
 
             % Prepare Results
-            results.UASPos = UASPos;
+            results.UASPos_all = UASPos_all;
             results.destroyedAssets = destroyedAssets; % Initialize assets destroyed
             results.cost = cost; % Initialize cost
             results.UASkilled = UASkilled; % Initialize UAS killed count
@@ -174,19 +174,20 @@ classdef simulator
             results.tick = obj.tick;
         end
 
-        function [event, sensors] = checkSensorCollision(obj, pos)
+        function [event, sensorID, ping, track_hist] = checkSensorCollision(obj, pos, track_hist)
             % Sensor collision detection
             event = 0;
-            sensors = 0;
-
+            sensorID = [];
+            max_detect_prob = 0;
             for i = 1:length(obj.sensors)
-                r = [pos(1), pos(2)] - obj.sensors(i).location;
-                if norm(r) <= obj.sensors(i).range
-                    event = 1;
-                    sensors = i;
-                    return;
-                end
+                sensor = obj.sensors(i);
+                detection_prob(i) = P_at_location(sensor, pos);
             end
+            [max_detect_prob, sensorID] = max(detection_prob);
+            ping = (max_detect_prob >= rand());
+            track_hist = [track_hist(2:end), ping];
+            tot_pings = sum(track_hist);
+            event = (tot_pings >= obj.sensors(1).params.pings);
         end
 
         function [event, effectors] = checkEffectorCollision(obj, pos, eventSensor)

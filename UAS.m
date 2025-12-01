@@ -11,7 +11,6 @@ classdef UAS < handle
         destroyedAssets
         totalAssets
         tempSpeed
-
     end
 
     methods
@@ -22,12 +21,10 @@ classdef UAS < handle
             obj.mode = mode;
             obj.tempSpeed = speed;
             obj.targetUnitVector = (obj.target - obj.position)/norm(obj.target - obj.position);
-
         end
 
         function obj = linearMotion(obj,time)
             obj.position = obj.position + obj.speed*time*obj.targetUnitVector;
-
         end
 
         function obj = searchMotion(obj,time,assets,destroyedAssets,NFZs)
@@ -103,7 +100,7 @@ classdef UAS < handle
                     options(n,:) = check';
 
                 end
-                crash = find(isinterior(obj.obstacles.NFZs,options)== true)
+                crash = find(isinterior(obj.obstacles.NFZs,options)== true);
 
             end
 
