@@ -16,7 +16,7 @@ classdef map < handle
             obj.size.horiz = horizontal;
         end
 
-        function displayMap(obj) % Display the initial map size and labels
+        function displayMap(obj) 
             hold on
             xlim([0,obj.size.horiz])
             ylim([0,obj.size.vert])
@@ -27,101 +27,71 @@ classdef map < handle
             ylabel("Y (m)")
         end
 
-        % Initialize animation
-        function startAnimation(obj, AOR, assets, NFZs, effectors, sensors, hideClock)
+        function startAnimation(obj, AOR, assets, NFZs, effectors, sensors, numUAS, hideClock)
             obj.displayMap
             
-            obj.UASTrail = plot(NaN, NaN, 'Color', 'r', 'DisplayName', "UAS Trail");
-            obj.UASHead = plot(NaN, NaN, 'Color', 'r', 'Marker', '^', 'DisplayName', "UAS");
-            obj.UASsensed = plot(NaN, NaN, 'Color', 'k', 'Marker', 'o', 'LineStyle', 'none', 'DisplayName', "UAS Sensor Detection Point");
-            obj.UASkilled = plot(NaN, NaN, 'Marker', 'x', 'Color', 'g', 'MarkerSize', 12);
+            obj.UASTrail = gobjects(1, numUAS);
+            obj.UASHead = gobjects(1, numUAS);
+            
+            for i = 1:numUAS
+                obj.UASTrail(i) = plot(NaN, NaN, 'Color', 'r', 'DisplayName', "UAS Trail " + i);
+                obj.UASHead(i) = plot(NaN, NaN, 'Color', 'r', 'Marker', '^', 'DisplayName', "UAS " + i);
+            end
+
+            obj.UASsensed = plot(NaN, NaN, 'Color', 'k', 'Marker', 'o', 'LineStyle', 'none', 'DisplayName', "Detection");
+            obj.UASkilled = plot(NaN, NaN, 'Marker', 'x', 'Color', 'g', 'MarkerSize', 12, 'DisplayName', "Kill Event");
             obj.assetDestroyed = plot(NaN, NaN, 'Marker', 'x', 'Color', 'r', 'MarkerSize', 20, 'LineWidth', 2, 'DisplayName', "Asset Destroyed");
 
-            % Determine if plot has already been initialized
             axesChildren = get(gca, 'Children');
-            axesMatch = findobj(axesChildren, 'DisplayName', "AOR");       % I, Daniel Burns, do recognize that this is quite possibly the worst way to make this check.
+            axesMatch = findobj(axesChildren, 'DisplayName', "AOR");       
 
             if isempty(axesMatch)
-                % Plot AOR
                 plot(AOR, 'FaceColor', 'white', 'FaceAlpha', 0.05, 'DisplayName', "AOR");
 
-                if hideClock == false
+                if ~hideClock
                     obj.timeBox = text(0.05*obj.size.vert, 0.95*obj.size.vert, 't: 0s', 'ColorMode', 'auto', 'EdgeColor', 'k');
                 end
 
-                % Plot assets
                 for i = 1:length(assets)
-                    obj.assets = plot(assets(i).location(1), assets(i).location(2), 'Marker', 'square', 'Color', 'g', 'MarkerSize', 10, 'LineWidth', 2, 'LineStyle','none' , 'DisplayName', "Asset " + i);
+                    plot(assets(i).location(1), assets(i).location(2), 'Marker', 'square', 'Color', 'g', 'MarkerSize', 10, 'LineWidth', 2, 'LineStyle','none' , 'DisplayName', "Asset " + i);
                 end
 
-                % Plot NFZs
-                if isempty(NFZs) == 0
+                if ~isempty(NFZs)
                     for i = 1:length(NFZs)
-                        obj.NFZs = plot(NFZs(i), 'FaceColor', 'y', 'FaceAlpha', 0.2, 'EdgeColor', 'y', 'DisplayName', "NFZ " + i);
+                        plot(NFZs(i), 'FaceColor', 'y', 'FaceAlpha', 0.2, 'EdgeColor', 'y', 'DisplayName', "NFZ " + i);
                     end
                 end
-                % Plot effectors
+                
                 for i = 1:length(effectors)
                     x = effectors(i).location(1);
                     y = effectors(i).location(2);
                     r = effectors(i).range;
-                    try
-                        rectangle('Position',[x-r, y-r, 2*r, 2*r], ...
-                            'Curvature', [1 1], ...
-                            'FaceColor', 'c', ...
-                            'EdgeColor', 'c', ...
-                            'LineStyle', '--', ...
-                            'FaceAlpha', 0.05)
-                    catch ME
-                        rectangle('Position',[x-r, y-r, 2*r, 2*r], ...
-                            'Curvature', [1 1], ...
-                            'FaceColor', 'none', ...
-                            'EdgeColor', 'c', ...
-                            'LineStyle', '--')
-
-                    end
-
-                    plot(x, y, '.', 'Color', 'c', 'DisplayName', "Sensor " + i, 'MarkerSize', 20)
+                    rectangle('Position',[x-r, y-r, 2*r, 2*r], 'Curvature', [1 1], 'FaceColor', 'c', 'EdgeColor', 'c', 'LineStyle', '--', 'FaceAlpha', 0.05);
+                    plot(x, y, '.', 'Color', 'c', 'DisplayName', "Effector " + i, 'MarkerSize', 20)
                 end
                 
-                % Plot sensors
-                for i = 1:length(effectors)
+                for i = 1:length(sensors)
                     x = sensors(i).location(1);
                     y = sensors(i).location(2);
                     r = sensors(i).range;
-
-                    try
-                        rectangle('Position',[x-r, y-r, 2*r, 2*r], ...
-                            'Curvature', [1 1], ...
-                            'FaceColor', 'm', ...
-                            'EdgeColor', 'm', ...
-                            'LineStyle', '--', ...
-                            'FaceAlpha', 0.05)
-                    catch ME
-                        rectangle('Position',[x-r, y-r, 2*r, 2*r], ...
-                            'Curvature', [1 1], ...
-                            'FaceColor', 'none', ...
-                            'EdgeColor', 'm', ...
-                            'LineStyle', '--')
-
-                    end
+                    rectangle('Position',[x-r, y-r, 2*r, 2*r], 'Curvature', [1 1], 'FaceColor', 'm', 'EdgeColor', 'm', 'LineStyle', '--', 'FaceAlpha', 0.05);
                     plot(x, y, '.', 'Color', 'm', 'DisplayName', "Sensor " + i, 'MarkerSize', 20)
                 end
             end
-
-            
-
             xlim([0,obj.size.horiz])
             ylim([0,obj.size.vert])
         end
 
-        function updateUASAnimation(obj, UASPos)
-            set(obj.UASTrail, 'XData', UASPos(:, 1), 'YData', UASPos(:, 2))
-            set(obj.UASHead, 'XData', UASPos(end, 1), 'YData', UASPos(end, 2))
-        end
-
-        function updatekilledLocations(obj, killedPos)
-            set(obj.UASkilled, 'XData', killedPos(:, 1), 'YData', killedPos(:, 2))
+        function updateUASAnimation(obj, UASPos_all)
+            for i = 1:length(obj.UASTrail)
+                if i <= length(UASPos_all)
+                    pos = UASPos_all{i};
+                    if ~isempty(pos)
+                        set(obj.UASTrail(i), 'XData', pos(:, 1), 'YData', pos(:, 2));
+                        set(obj.UASHead(i), 'XData', pos(end, 1), 'YData', pos(end, 2));
+                    end
+                end
+            end
         end
 
         function animateDestroyedAssets(obj, assets, destroyedAssets)
@@ -144,10 +114,6 @@ classdef map < handle
 
         function updateClock(obj, time)
             set(obj.timeBox, 'String', ['t: ', sprintf('%.2f', time), 's']);
-        end
-
-        function cleanAnimation(obj)
-            obj.timeBox = [];
         end
 
         function wipeAnimation(obj)

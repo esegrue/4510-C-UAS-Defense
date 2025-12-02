@@ -1,16 +1,14 @@
 classdef simulator
-    %SIMULATOR for C-UAS Effector Placement
-    %   This is the main simulator class for the UAS-Effector Placement. This
-    %   is where time will march, and from here all map updates are called.
-
+    % SIMULATOR for C-UAS Effector Placement
+    
     properties
         map
         AOR
-        UAS
-        UASPos_all
-        effectors
-        sensors
-        assets
+        UAS             
+        UASPos_all      
+        effectors       
+        sensors         
+        assets          
         tick
         dt
         tps
@@ -19,12 +17,11 @@ classdef simulator
         resetGraphics
         animationMultiplier
         hideClock
-        cost
+        fadePings 
     end
 
     methods
         function obj = simulator(map, aor, uas, effectors, sensors, assets, options)
-            %SIMULATOR
             arguments
                 map
                 aor
@@ -32,16 +29,17 @@ classdef simulator
                 effectors
                 sensors
                 assets
-                options.tps double = 20                                     % How many ticks per second the logical system should operate in, AKA: simulation resolution
-                options.animate logical = true                              % Set false if you just want data
-                options.nfzs polyshape = polyshape.empty                    % This is where you declare any NFZs you want, should you decide to do so
-                options.resetGraphics logical = true                        % This will reset all graphics if used over multiple iterations FOR THE SAME MAP! As such, default is true
-                options.animationMultiplier double = 1                      % Animation speed multiplier, default 1x
-                options.hideClock logical = false                           % Set true if you want to hide the clock
+                options.tps double = 20
+                options.animate logical = true
+                options.nfzs polyshape = polyshape.empty
+                options.resetGraphics logical = true
+                options.animationMultiplier double = 1
+                options.hideClock logical = false
+                options.fadePings logical = false 
             end
             obj.map = map;
             obj.AOR = aor;
-            obj.UAS = uas;
+            obj.UAS = uas; 
             obj.effectors = effectors;
             obj.sensors = sensors;
             obj.assets = assets;
@@ -53,197 +51,211 @@ classdef simulator
             obj.resetGraphics = options.resetGraphics;
             obj.animationMultiplier = options.animationMultiplier;
             obj.hideClock = options.hideClock;
+            obj.fadePings = options.fadePings; 
+            
+            % Initialize history for N UAS
+            obj.UASPos_all = cell(1, length(obj.UAS));
+            for i = 1:length(obj.UAS)
+                obj.UASPos_all{i} = [obj.UAS(i).position(1), obj.UAS(i).position(2)];
+            end
         end
 
         function results = runSim(obj)
-            destroyedAssets = [];                                           % Initialize assets destroyed
+            destroyedAssets = [];
             cost = 0;
-            UASkilled = 0;                                                  % Initialize UAS killed count
+            UASkilled = 0;
             UASsensed = 0;
-            NFZEntered = false;                                             % Initialize NFZ entry status
-            lastTick = false;                                               % Initialize lastTick to be set true when simulation should end
-            UASsensedPos = [];
-            UASkilledPos = [];                                              % Initialize matrix to track all positions in which the UAS is killed
-            UASPos_all = [obj.UAS.position(1), obj.UAS.position(2)];            % This matrix tracks all current and previous UAS positions
+            NFZEntered = false;
+            simComplete = false;
             
-            if obj.animate == true
+            UASsensedPos = [];
+            UASkilledPos = [];
+            
+            % Initialize Graphics
+            if obj.animate
                 if obj.resetGraphics
                     obj.map.wipeAnimation()
                 end
-                obj.map.startAnimation(obj.AOR, obj.assets, obj.NFZs, obj.effectors, obj.sensors, obj.hideClock);
+                % Pass number of UAS to map
+                obj.map.startAnimation(obj.AOR, obj.assets, obj.NFZs, obj.effectors, obj.sensors, length(obj.UAS), obj.hideClock);
             end
 
             req_pings = obj.sensors(1).params.pings;
             window_duration = obj.sensors(1).params.duration;
             window_ticks = ceil(window_duration/obj.dt);
-            track_hist = zeros([1 window_ticks]);
+            track_hist = zeros(length(obj.UAS), window_ticks);
 
-            while lastTick == false
-                if obj.tick ~= 0
-                    % Determine new UAS Position
-                    if obj.UAS.mode == "Linear"
-                        obj.UAS.linearMotion(obj.dt);
-                    elseif obj.UAS.mode == "Search"
-                        obj.UAS.searchMotion(obj.dt,obj.assets, destroyedAssets);
-                    else
-                        error("Improperly defined UAS mode. Simulation terminating.") % Move this check and error to UAS initialization???
-                    end
-
-                    % Update local UASPos
-                    UASPos_all = cat(1, UASPos_all, obj.UAS.position);
-                end
-                UASPos = UASPos_all(end,:);
-
-
-                % Check for any logical events
-                [eventSensor, ~, ~, track_hist] = obj.checkSensorCollision(UASPos, track_hist);   
-                [eventEffector] = obj.checkEffectorCollision(UASPos, eventSensor);
-                [eventAsset,  asset] = obj.checkAssetCollision(UASPos, obj.UAS.speed*obj.dt);
-                [eventNFZ] = obj.checkNFZCollision(UASPos);
-                [eventExitBounds] = obj.checkOutOfBounds(UASPos, obj.map.size);
-
-                if eventSensor == 1
-                    UASsensedPos = cat(1, UASsensedPos, [obj.tick*obj.tps/60, UASPos]);
-                    UASsensed = 1;
-                    if obj.animate
-                        obj.map.animateUASsensed(UASsensedPos)
-                    end
-                end
-
-                if eventEffector == 1 % UAS killed
-                    UASkilledPos = cat(1, UASkilledPos, [obj.tick*obj.tps/60, UASPos]);
-                    UASkilled = 1;
-                    cost = cost + 100; % cost to use effector
-                    if obj.animate
-                        obj.map.animateUASkilled(UASPos)
-                        %obj.map.updatekilledLocations(UASkilledPos(:, 2:3))
-                    end
-                    lastTick = true;
-                end
-
-                if eventAsset == 1 % Asset attacked
-                    if ~any(destroyedAssets == asset)
-                        destroyedAssets(end + 1) = asset;
-                        cost = cost + 1000; % cost of mission failure
-                        if obj.animate
-                            obj.map.animateDestroyedAssets(obj.assets, destroyedAssets);
-                        end
-                        lastTick = false;
-                    end
-                end
-
-                if eventNFZ == 1 % UAS entered NFZ
-                    if obj.animate
-                        obj.map.animateUASkilled(UASPos)
-                    end
-                    NFZEntered = true;
-                    lastTick = true;
-                end
-
-                if eventExitBounds == true % UAS Left the map
-                    lastTick = true;
-                end
-
-                % Determine UAS Track
-
-                % Determine if UAS can be destroyed
+            while ~simComplete
+                simComplete = true; 
                 
-                % Update Animation
+                % 1. MOVE ALL UAS
+                if obj.tick ~= 0
+                    for i = 1:length(obj.UAS)
+                        if obj.UAS(i).active
+                            simComplete = false; 
+                            if obj.UAS(i).mode == "Linear"
+                                obj.UAS(i).linearMotion(obj.dt);
+                            elseif obj.UAS(i).mode == "Search"
+                                obj.UAS(i).searchMotion(obj.dt, obj.assets, destroyedAssets, obj.NFZs);
+                            end
+                            obj.UASPos_all{i} = cat(1, obj.UASPos_all{i}, obj.UAS(i).position);
+                        end
+                    end
+                else
+                    simComplete = false;
+                end
+
+                if simComplete
+                    break; 
+                end
+
+                % 2. CHECK COLLISIONS
+                for i = 1:length(obj.UAS)
+                    if ~obj.UAS(i).active
+                        continue;
+                    end
+                    
+                    pos = obj.UAS(i).position;
+                    currentTime = obj.tick * obj.dt; 
+                    
+                    [isPinged, isTracked, track_hist(i,:)] = obj.checkSensorCollision(pos, track_hist(i,:), req_pings);
+                    [eventEffector] = obj.checkEffectorCollision(pos, isTracked);
+                    [eventAsset, assetID] = obj.checkAssetCollision(pos, obj.UAS(i).speed * obj.dt);
+                    [eventNFZ] = obj.checkNFZCollision(pos);
+                    [eventExitBounds] = obj.checkOutOfBounds(pos, obj.map.size);
+
+                    if isPinged
+                         UASsensedPos = cat(1, UASsensedPos, [currentTime, pos]);
+                         UASsensed = UASsensed + 1; 
+                         
+                         if obj.animate
+                             if obj.fadePings
+                                 validIdx = UASsensedPos(:,1) >= (currentTime - window_duration);
+                                 plotData = UASsensedPos(validIdx, :);
+                                 obj.map.animateUASsensed(plotData);
+                             else
+                                 obj.map.animateUASsensed(UASsensedPos);
+                             end
+                         end
+                    end
+
+                    if eventEffector
+                        UASkilledPos = cat(1, UASkilledPos, [currentTime, pos]);
+                        UASkilled = UASkilled + 1;
+                        cost = cost + 100;
+                        obj.UAS(i).active = false; 
+                        if obj.animate
+                            obj.map.animateUASkilled(pos)
+                        end
+                    end
+
+                    if eventAsset
+                        if ~any(destroyedAssets == assetID)
+                            destroyedAssets(end + 1) = assetID;
+                            cost = cost + 1000;
+                            if obj.animate
+                                obj.map.animateDestroyedAssets(obj.assets, destroyedAssets);
+                            end
+                            simComplete = true; 
+                        end
+                    end
+
+                    if eventNFZ
+                        if obj.animate
+                            obj.map.animateUASkilled(pos) 
+                        end
+                        NFZEntered = true;
+                        obj.UAS(i).active = false;
+                    end
+
+                    if eventExitBounds
+                        obj.UAS(i).active = false;
+                    end
+                end
+
+                % 3. UPDATE ANIMATION
                 if obj.animate
                     pause(obj.dt/obj.animationMultiplier)
-                    obj.map.updateUASAnimation(UASPos_all)
-                    if obj.hideClock == false
+                    % Pass entire cell array to map
+                    if ~isempty(obj.UASPos_all)
+                         obj.map.updateUASAnimation(obj.UASPos_all); 
+                    end
+                    if ~obj.hideClock
                         time = obj.tick/obj.tps;
                         obj.map.updateClock(time)
                     end
                 end
 
-                obj.tick = obj.tick + 1; % Progress time
+                obj.tick = obj.tick + 1;
             end
 
-            % Clean Sim
-            
-
-            % Prepare Results
-            results.UASPos_all = UASPos_all;
-            results.destroyedAssets = destroyedAssets; % Initialize assets destroyed
-            results.cost = cost; % Initialize cost
-            results.UASkilled = UASkilled; % Initialize UAS killed count
+            results.UASPos_all = obj.UASPos_all;
+            results.destroyedAssets = destroyedAssets; 
+            results.cost = cost; 
+            results.UASkilled = UASkilled;
             results.UASkilledPos = UASkilledPos;
-            results.NFZEntered = NFZEntered; % Initialize NFZ entry status
+            results.NFZEntered = NFZEntered; 
             results.tick = obj.tick;
         end
 
-        function [event, sensorID, ping, track_hist] = checkSensorCollision(obj, pos, track_hist)
-            % Sensor collision detection
-            event = 0;
-            sensorID = [];
-            max_detect_prob = 0;
-            for i = 1:length(obj.sensors)
-                sensor = obj.sensors(i);
-                detection_prob(i) = P_at_location(sensor, pos);
+        function [isPinged, isTracked, new_hist] = checkSensorCollision(obj, pos, current_hist, req_pings)
+            if isempty(obj.sensors)
+                isPinged = 0; isTracked = 0; new_hist = current_hist; return;
             end
-            [max_detect_prob, sensorID] = max(detection_prob);
-            ping = (max_detect_prob >= rand());
-            track_hist = [track_hist(2:end), ping];
-            tot_pings = sum(track_hist);
-            event = (tot_pings >= obj.sensors(1).params.pings);
-        end
-
-        function [event, effectors] = checkEffectorCollision(obj, pos, eventSensor)
-            % Effector collision detection
-            event = 0; % Initialize event to no collision
-            effectors = 0; % Initialize effectors index
             
-            if eventSensor
-                for i = 1:length(obj.effectors)
-                    r = [pos(1), pos(2)] - obj.effectors(i).location;
-                    if norm(r) <= obj.effectors(i).range
-                        event = 1; % Collision detected
-                        effectors = i; % Store the index of the colliding effectors
-                        return; % Exit the function early
-                    end
-                end
+            probs = zeros(1, length(obj.sensors));
+            for k = 1:length(obj.sensors)
+                probs(k) = interp2(obj.sensors(k).xg, obj.sensors(k).yg, obj.sensors(k).P, pos(1), pos(2), 'linear', 0);
+            end
+            
+            max_detect_prob = max(probs);
+            isPinged = (max_detect_prob >= rand());
+            new_hist = [current_hist(2:end), isPinged];
+            isTracked = (sum(new_hist) >= req_pings);
+        end
+
+        function [event, effectorID] = checkEffectorCollision(obj, pos, isTracked)
+            event = 0; effectorID = 0;
+            if ~isTracked || isempty(obj.effectors)
+                return;
+            end
+            
+            effLocs = reshape([obj.effectors.location], 2, [])';
+            effRanges = [obj.effectors.range]';
+            dists = sqrt(sum((effLocs - pos).^2, 2));
+            inRangeIdx = find(dists <= effRanges);
+            
+            if ~isempty(inRangeIdx)
+                event = 1;
+                effectorID = inRangeIdx(1); 
             end
         end
 
-        function [event, asset] = checkAssetCollision(obj, pos, deltaPos)
-            % Asset collision
-            for i = 1:length(obj.assets)
-                deltaAssetPos = norm(obj.assets(i).location - [pos(1), pos(2)]);
-                if deltaAssetPos <= deltaPos
-                    event = 1;
-                    asset = i;
-                    return
-                else
-                    event = 0; asset = 0;
-                end
+        function [event, assetID] = checkAssetCollision(obj, pos, deltaPos)
+            event = 0; assetID = 0;
+            if isempty(obj.assets); return; end
+            
+            assetLocs = reshape([obj.assets.location], 2, [])';
+            dists = sqrt(sum((assetLocs - pos).^2, 2));
+            hitIdx = find(dists <= deltaPos);
+            if ~isempty(hitIdx)
+                event = 1;
+                assetID = hitIdx(1);
             end
         end
 
-        function [event, NFZ] = checkNFZCollision(obj, pos)
-            % NFZ collision
-            event = 0; NFZ = 0;
-            if isempty(obj.NFZs) == 0
-                for i = 1:length(obj.NFZs)
-                    if isinterior(obj.NFZs(i), pos(1), pos(2)) == 1
-                        event = 1;
-                        NFZ = i;
-                        return
-                    end
+        function [event, NFZID] = checkNFZCollision(obj, pos)
+            event = 0; NFZID = 0;
+            if isempty(obj.NFZs); return; end
+            for i = 1:length(obj.NFZs)
+                if isinterior(obj.NFZs(i), pos(1), pos(2))
+                    event = 1; NFZID = i; return;
                 end
             end
         end
 
         function [event] = checkOutOfBounds(~, pos, size)
-            % Check is UAS is out-of-bounds
-            if pos(1) < 0 || pos(1) > size.vert
-                event = true;
-            elseif pos(2) < 0 || pos(2) > size.horiz
-                event = true;
-            else
-                event = false;
-            end
+            event = (pos(1) < 0 || pos(1) > size.vert || pos(2) < 0 || pos(2) > size.horiz);
         end
     end
 end
