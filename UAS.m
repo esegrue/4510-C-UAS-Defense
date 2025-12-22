@@ -11,16 +11,19 @@ classdef UAS < handle
         destroyedAssets
         totalAssets
         tempSpeed
+        altitude
     end
 
     methods
-        function obj = UAS(speed, entrance, target, mode)
+        function obj = UAS(speed, entrance, target, mode, altitude)
             obj.speed = speed;
-            obj.position = entrance;
+            obj.altitude = altitude;
+            obj.position = [entrance(1), entrance(2), altitude];
             obj.target = target;
             obj.mode = mode;
             obj.tempSpeed = speed;
-            obj.targetUnitVector = (obj.target - obj.position)/norm(obj.target - obj.position);
+            dir2D = obj.target(1:2) - obj.position(1:2);
+            obj.targetUnitVector = [dir2D/norm(dir2D), 0]; % Z-component is 0
             obj.active = true; % Default to active
         end
 
@@ -31,13 +34,15 @@ classdef UAS < handle
         end
 
         function searchMotion(obj, time, assets, destroyedAssets, NFZs)
-            if ~obj.active; return; end
+            if ~obj.active
+                return;
+            end
             
             obj.range = 20;
             obj.obstacles.NFZs = NFZs;
             obj.obstacles.assets = assets;
             
-            % avoidNFZ logic needs to be fixed to actually turn the UAS 
+            % avoidNFZ logic needs to be fixed to actually turn the UAS
             obj.avoidNFZ(); 
 
             obj.totalAssets = length(obj.obstacles.assets);
@@ -51,7 +56,8 @@ classdef UAS < handle
             if ~isempty(currentAssets)
                 assetDistance = zeros(1, length(currentAssets));
                 for n = 1:length(currentAssets)
-                    assetDistance(n) = norm(obj.position - currentAssets(n).location);
+                    dist2D = norm(obj.position(1:2) - currentAssets(n).location(1:2));
+                    assetDistance(n) = dist2D;
                 end
                 [minDist, assetNumber] = min(assetDistance);
 
@@ -65,11 +71,15 @@ classdef UAS < handle
 
         function assetFound(obj, assetDistance, assetNumber, time, currentAssets)
             turnRadius = assetDistance/2;
-            assetLocation = currentAssets(assetNumber).location - obj.position;
-            turnAngle = acos(dot(obj.targetUnitVector, assetLocation)/(norm(obj.targetUnitVector)*norm(assetLocation)));
-            rotDir = cross([obj.targetUnitVector, 0], [obj.position, 0] - [currentAssets(assetNumber).location, 0]);
+            
+            assetLocation = [currentAssets(assetNumber).location, 0] - [obj.position(1:2), 0];
+            
+            tuv = [obj.targetUnitVector(1:2), 0];
+            
+            turnAngle = acos(dot(tuv, assetLocation)/(norm(tuv)*norm(assetLocation)));
+            rotDir = cross(tuv, assetLocation);
+            
             angleVelo = (sin(turnAngle)*obj.speed)/turnRadius;
-
             angle = angleVelo*time;
 
             if abs(turnAngle) > 0.1
@@ -87,7 +97,10 @@ classdef UAS < handle
             else
                 DCM = eye(2);
             end
-            obj.targetUnitVector = (DCM*obj.targetUnitVector')';
+            
+            newVec2D = (DCM * obj.targetUnitVector(1:2)')';
+            obj.targetUnitVector = [newVec2D, 0];
+            
             obj.position = obj.position + obj.tempSpeed*time*obj.targetUnitVector;
         end
 
