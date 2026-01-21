@@ -43,7 +43,7 @@ classdef simulator
             % Initialize history for N UAS
             obj.UASPos_all = cell(1, length(obj.UAS));
             for i = 1:length(obj.UAS)
-                obj.UASPos_all{i} = obj.UAS(i).position
+                obj.UASPos_all{i} = obj.UAS(i).position;
             end
         
             if ~isempty(obj.effectors)
