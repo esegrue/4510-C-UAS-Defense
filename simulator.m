@@ -19,6 +19,7 @@ classdef simulator
         fadePings
         costConfig
         effectors3D 
+        occMap
     end
 
     methods
@@ -39,11 +40,24 @@ classdef simulator
             obj.animate = options.animate; obj.NFZs = options.nfzs; obj.resetGraphics = options.resetGraphics;
             obj.animationMultiplier = options.animationMultiplier; obj.hideClock = options.hideClock; obj.fadePings = options.fadePings; 
             obj.costConfig = options.costConfig;
+
+            %defining NFZs based on elevation
+            mapL = obj.map.size.vert;
+            mapW = obj.map.size.horiz;
+            costmap = zeros(mapL+1, mapW+1);
+            for x = 0:1:mapL
+                for y = 0:1:mapW
+                    costmap(x+1,y+1) = obj.map.getElevation(x,y) > 20; %arbitrary height
+                end
+            end
+            
+            obj.occMap = binaryOccupancyMap(fliplr(costmap)); %map mirrors for some reason
+
             
             % Initialize history for N UAS
             obj.UASPos_all = cell(1, length(obj.UAS));
             for i = 1:length(obj.UAS)
-                obj.UASPos_all{i} = obj.UAS(i).position
+                obj.UASPos_all{i} = obj.UAS(i).position;
             end
         
             if ~isempty(obj.effectors)
@@ -100,6 +114,7 @@ classdef simulator
                 % Pass number of UAS to map
                 obj.map.startAnimation(obj.AOR, obj.assets, obj.effectors, obj.sensors, numUAS, obj.hideClock);
                 UASsensedPos = [];
+                view(0,90)
             end
             
             simComplete = false; tick_count = 0;
@@ -123,6 +138,8 @@ classdef simulator
                     uasObj = obj.UAS(i);
                     if uasObj.mode == "Linear"
                         uasObj.linearMotion(dt_local);
+                    elseif uasObj.mode == "HybridAStar"
+                        uasObj.hybridAStarMotion(dt_local, tick_count, 3.0, obj.occMap)
                     elseif uasObj.mode == "Search"
                         uasObj.searchMotion(dt_local, obj.assets, destroyedAssets, obj.NFZs);
                     end
@@ -174,8 +191,7 @@ classdef simulator
                     z_terr = terrainProxy(pos(2), pos(1)); 
                     eventCrash = (pos(3) <= z_terr);
                     
-                    eventExit = (pos(1) < 0 || pos(1) > obj.map.size.horiz || pos(2) < 0 || pos(2) > obj.map.size.vert);
-
+                    eventExit = (pos(1) < 1 || pos(1) > obj.map.size.horiz - 1 || pos(2) < 1 || pos(2) > obj.map.size.vert - 1);
                     if eventEffector
                         cost = cost + cost_eff; outcomeLog(end+1) = "Intercept";
                         uasObj.active = false; uas_active(i) = false; UASkilled = UASkilled + 1;
@@ -186,16 +202,17 @@ classdef simulator
                         uasObj.active = false; uas_active(i) = false;
                         if animate_on; obj.map.animateUAScrashed(pos); end
                         
-                    elseif eventExit
+                    elseif eventExit & destroyedAssets > 0
                         cost = cost + cost_leak; outcomeLog(end+1) = "Escaped";
                         uasObj.active = false; uas_active(i) = false;
+                        simComplete = true;
                         
                     elseif eventAsset
                         if ~any(destroyedAssets == hitAssetID)
                             destroyedAssets(end+1) = hitAssetID;
                             cost = cost + cost_asset; outcomeLog(end+1) = "AssetHit";
                             if animate_on; obj.map.animateDestroyedAssets(obj.assets, destroyedAssets); end
-                            simComplete = true; 
+                            %simComplete = true; 
                         end
                     end
                 end 
@@ -207,7 +224,6 @@ classdef simulator
                     if ~obj.hideClock; obj.map.updateClock(currentTime); end
                 end
             end
-            
             results.UASPos_all = obj.UASPos_all;
             results.destroyedAssets = destroyedAssets; 
             results.cost = cost; 

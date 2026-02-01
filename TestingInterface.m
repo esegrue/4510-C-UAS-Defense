@@ -7,6 +7,7 @@ mapObj = map(mapL, mapW, 1);
 mapObj.generateTerrain('Hills', 30); 
 xlims = [0 mapL]; ylims = [0 mapW];
 
+
 % simulation settings
 numAssets = 2; numSensors = 2; numEffectors = 2; numAdversaries = 3;
 
@@ -45,7 +46,7 @@ costConfig = struct('effector', 100, 'asset', 2000, 'leak', 250);
 reliabilityThreshold = 90; 
 
 % MONTE CARLO SETTINGS
-max_configs = 100;
+max_configs = 1000;
 num_tests = 20;
 delta = 10; 
 
@@ -82,11 +83,11 @@ while num_configs < max_configs
         starts = ingressPosns(xlims, ylims, numAdversaries);
         uasArray = UAS.empty(0, numAdversaries);
         for k = 1:numAdversaries
-            uasArray(k) = UAS(15, starts(k,:), assets(1).location, 'Linear', 25);
+            uasArray(k) = UAS(15, starts(k,:), assets(1).location, 'HybridAStar', 25);
         end
         
         % simulating
-        sim = simulator(mapObj, AOR, uasArray, currentEffectors, sensors, assets, 'tps', 20, 'animate', false, 'nfzs', polyshape.empty, 'resetGraphics', true, 'costConfig', costConfig);
+        sim = simulator(mapObj, AOR, uasArray, currentEffectors, sensors, assets, 'tps', 20, 'animate', false, 'nfzs', polyshape.empty, 'resetGraphics', true, 'costConfig', costConfig)
         runResults = sim.runSim();
         runCosts(j) = runResults.cost; 
         runStarts{j} = starts;
@@ -169,7 +170,7 @@ for k = 1:num_tests
     replayStartPos = scenariosToReplay{k};
     uasArray = UAS.empty(0, numAdversaries);
     for u = 1:numAdversaries
-        uasArray(u) = UAS(15, replayStartPos(u,:), assets(1).location, 'Linear', 25);
+        uasArray(u) = UAS(15, replayStartPos(u,:), assets(1).location, 'HybridAStar', 25);
     end
     sim = simulator(mapObj, AOR, uasArray, bestEffectors, sensors, assets, ...
         'tps', 20, 'animate', true, 'fadePings', true, 'nfzs', polyshape.empty, ...
