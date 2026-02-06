@@ -51,7 +51,7 @@ classdef UAS < handle
                     ss.StateBounds = [costMap.XWorldLimits; costMap.YWorldLimits; -pi pi];
                     sv = validatorOccupancyMap(ss);
                     sv.Map = costMap;
-                    show(costMap)
+                    %show(costMap)
                     obj.planner = plannerHybridAStar(sv, 'MinTurningRadius', turnRadius, "InterpolationDistance",obj.speed*time);
                     % Plan initial path
                     refPath = plan(obj.planner, [obj.position(1:2), obj.heading], [obj.target, obj.heading+pi/2]);
@@ -75,7 +75,7 @@ classdef UAS < handle
                         refPath = plan(obj.planner, [positionxy, obj.heading], [obj.target, obj.heading]);
                         obj.pathPoints = refPath.States(:, 1:2);  % Just x,y coordinates
                         pts = refPath.States; % [x y theta]
-                        plot(pts(:,1), pts(:,2), 'g--', 'LineWidth', 2);
+                        %plot(pts(:,1), pts(:,2), 'g--', 'LineWidth', 2);
                         obj.tickOffset = tick-1;
                         pose = obj.pathPoints(tick - obj.tickOffset,:);
                         obj.position = [pose(1), pose(2), obj.position(3)];
