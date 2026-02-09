@@ -30,6 +30,7 @@ numAssets = 1; numSensors = 2; numEffectors = 3; numAdversaries = 3;
 % loading effector positions and adversary paths banks
 load("effector_posn_bank.mat")
 % load("adversary_paths_bank.mat")
+load("adversary_paths_bank.mat") %NOT IMPLEMENTED YET
 
 % defining asset
 assetStructTemplate = struct('location', [0,0]);
