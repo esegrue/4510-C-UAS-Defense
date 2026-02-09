@@ -73,7 +73,9 @@ classdef simulator
 
         function results = runSim(obj)
             dt_local = obj.dt;
-            cost_eff = obj.costConfig.effector; cost_leak = obj.costConfig.leak; cost_asset = obj.costConfig.asset;
+            cost_eff = obj.costConfig.effector; 
+            cost_leak = obj.costConfig.leak; 
+            cost_asset = obj.costConfig.asset;
             
             hasSensors = ~isempty(obj.sensors);
             if hasSensors
@@ -103,7 +105,7 @@ classdef simulator
             
             track_hist = zeros(numUAS, req_pings); 
 
-            destroyedAssets = []; cost = 0; UASkilled = 0; outcomeLog = strings(0); 
+            destroyedAssets = []; cost = 0; UASkilled = 0; UASkillLocations = []; outcomeLog = strings(0); 
             
             % Initialize Graphics
             animate_on = obj.animate;
@@ -185,7 +187,10 @@ classdef simulator
                     if hasAssets
                         d_asset = sqrt((assetLocs(:,1) - pos(1)).^2 + (assetLocs(:,2) - pos(2)).^2);
                         hitIdx = find(d_asset <= (uasObj.speed * dt_local)); 
-                        if ~isempty(hitIdx); eventAsset = true; hitAssetID = hitIdx(1); end
+                        if ~isempty(hitIdx)
+                            eventAsset = true;
+                            hitAssetID = hitIdx(1);
+                        end
                     end
                     
                     z_terr = terrainProxy(pos(2), pos(1)); 
@@ -193,8 +198,12 @@ classdef simulator
                     
                     eventExit = (pos(1) < 1 || pos(1) > obj.map.size.horiz - 1 || pos(2) < 1 || pos(2) > obj.map.size.vert - 1);
                     if eventEffector
-                        cost = cost + cost_eff; outcomeLog(end+1) = "Intercept";
-                        uasObj.active = false; uas_active(i) = false; UASkilled = UASkilled + 1;
+                        cost = cost + cost_eff; 
+                        outcomeLog(end+1) = "Intercept";
+                        UASkillLocations = [UASkillLocations; pos];
+                        uasObj.active = false; 
+                        uas_active(i) = false; 
+                        UASkilled = UASkilled + 1;
                         if animate_on; obj.map.animateUASkilled(pos); end
                         
                     elseif eventCrash
@@ -228,6 +237,7 @@ classdef simulator
             results.destroyedAssets = destroyedAssets; 
             results.cost = cost; 
             results.UASkilled = UASkilled;
+            results.UASkillLocations = UASkillLocations;
             results.outcomeLog = outcomeLog;
             results.tick = tick_count;
         end

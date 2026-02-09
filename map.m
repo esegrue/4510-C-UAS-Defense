@@ -72,8 +72,11 @@ classdef map < handle
         end
 
         function startAnimation(obj, AOR, assets, effectors, sensors, numUAS, hideClock)
+            if isempty(get(groot, 'CurrentFigure'))
+                figure('Name', 'Simulation Animation', 'Position', [100 100 600 400]);
+            end
+
             obj.displayMap
-            
             obj.UASTrail = gobjects(1, numUAS);
             obj.UASHead = gobjects(1, numUAS);
             z_offset = 1; 
