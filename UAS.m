@@ -8,8 +8,8 @@ classdef UAS < handle
         range
         active
         obstacles
-        destroyedAssets
-        totalAssets
+        destroyedAsset
+        totalAsset
         tempSpeed
         altitude
 
@@ -87,51 +87,38 @@ classdef UAS < handle
             end
         end
 
-        function searchMotion(obj, time, assets, destroyedAssets, NFZs)
+        function searchMotion(obj, time, asset, isAssetDestroyed, NFZs)
             if ~obj.active
                 return;
             end
             
             obj.range = 20;
             obj.obstacles.NFZs = NFZs;
-            obj.obstacles.assets = assets;
+            obj.obstacles.asset = asset;
             
             % avoidNFZ logic needs to be fixed to actually turn the UAS
             obj.avoidNFZ(); 
 
-            obj.totalAssets = length(obj.obstacles.assets);
-            obj.destroyedAssets = destroyedAssets;
-
-            currentAssets = obj.obstacles.assets;
-            if ~isempty(obj.destroyedAssets)
-                currentAssets(obj.destroyedAssets) = [];
-            end
-
-            if ~isempty(currentAssets)
-                assetDistance = zeros(1, length(currentAssets));
-                for n = 1:length(currentAssets)
-                    dist2D = norm(obj.position(1:2) - currentAssets(n).location(1:2));
-                    assetDistance(n) = dist2D;
-                end
-                [minDist, assetNumber] = min(assetDistance);
-
-                if minDist <= obj.range
-                    obj.assetFound(minDist, assetNumber, time, currentAssets);
+            if ~isAssetDestroyed
+                dist2D = norm(obj.position(1:2) - asset.location(1:2));
+                
+                if dist2D <= obj.range
+                    obj.assetFound(dist2D, asset.location, time);
                 else
                     obj.position = obj.position + obj.speed*time*obj.targetUnitVector;
                 end
             end
         end
 
-        function assetFound(obj, assetDistance, assetNumber, time, currentAssets)
+        function assetFound(obj, assetDistance, assetLocation, time)
             turnRadius = assetDistance/2;
             
-            assetLocation = [currentAssets(assetNumber).location, 0] - [obj.position(1:2), 0];
+            assetVector = [assetLocation, 0] - [obj.position(1:2), 0];
             
             tuv = [obj.targetUnitVector(1:2), 0];
             
-            turnAngle = acos(dot(tuv, assetLocation)/(norm(tuv)*norm(assetLocation)));
-            rotDir = cross(tuv, assetLocation);
+            turnAngle = acos(dot(tuv, assetVector)/(norm(tuv)*norm(assetVector)));
+            rotDir = cross(tuv, assetVector);
             
             angleVelo = (sin(turnAngle)*obj.speed)/turnRadius;
             angle = angleVelo*time;

@@ -71,7 +71,7 @@ classdef map < handle
             xlabel("X (m)"); ylabel("Y (m)"); zlabel("Elevation (m)");
         end
 
-        function startAnimation(obj, AOR, assets, effectors, sensors, numUAS, hideClock)
+        function startAnimation(obj, asset, effectors, sensors, numUAS, hideClock)
             if isempty(get(groot, 'CurrentFigure'))
                 figure('Name', 'Simulation Animation', 'Position', [100 100 600 400]);
             end
@@ -95,17 +95,16 @@ classdef map < handle
             axesMatch = findobj(axesChildren, 'DisplayName', "AOR");       
 
             if isempty(axesMatch)
-                plot(AOR, 'FaceColor', 'white', 'FaceAlpha', 0.05, 'DisplayName', "AOR");
+                % Removed AOR Plotting
 
                 if ~hideClock
                     obj.timeBox = text(0.05*obj.size.vert, 0.95*obj.size.vert, 50, 't: 0s', ...
                         'ColorMode', 'auto', 'EdgeColor', 'k', 'BackgroundColor', 'w');
                 end
 
-                for i = 1:length(assets)
-                    x = assets(i).location(1); y = assets(i).location(2); z = obj.getElevation(x, y);
-                    plot3(x, y, z+z_offset, 'Marker', 'square', 'Color', 'g', 'MarkerSize', 10, 'LineWidth', 2, 'LineStyle','none' , 'DisplayName', "Asset " + i);
-                end
+                % Single Asset Plotting
+                x = asset.location(1); y = asset.location(2); z = obj.getElevation(x, y);
+                plot3(x, y, z+z_offset, 'Marker', 'square', 'Color', 'g', 'MarkerSize', 10, 'LineWidth', 2, 'LineStyle','none' , 'DisplayName', "Asset");
                 
                 for i = 1:length(effectors)
                     loc = effectors(i).location; range = effectors(i).range;
@@ -149,13 +148,9 @@ classdef map < handle
             end
         end
 
-        function animateDestroyedAssets(obj, assets, destroyedAssets)
-            XData = []; YData = []; ZData = [];
-            for i = 1:length(destroyedAssets)
-                x = assets(destroyedAssets(i)).location(1); y = assets(destroyedAssets(i)).location(2); z = obj.getElevation(x, y) + 1; 
-                XData(end+1) = x; YData(end+1) = y; ZData(end+1) = z;
-            end
-            set(obj.assetDestroyed, 'XData', XData, 'YData', YData, 'ZData', ZData)
+        function animateDestroyedAsset(obj, asset)
+            x = asset.location(1); y = asset.location(2); z = obj.getElevation(x, y) + 1; 
+            set(obj.assetDestroyed, 'XData', x, 'YData', y, 'ZData', z)
         end
 
         function animateUASsensed(obj, position)

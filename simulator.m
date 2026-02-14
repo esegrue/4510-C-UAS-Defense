@@ -1,12 +1,11 @@
 classdef simulator
     properties
         map
-        AOR
         UAS
         UASPos_all
         effectors
         sensors
-        assets
+        asset
 
         tick
         dt
@@ -23,9 +22,9 @@ classdef simulator
     end
 
     methods
-        function obj = simulator(map, aor, uas, effectors, sensors, assets, options)
+        function obj = simulator(map, uas, effectors, sensors, asset, options)
             arguments
-                map, aor, uas, effectors, sensors, assets
+                map, uas, effectors, sensors, asset
                 options.tps = 20
                 options.animate = true
                 options.nfzs = polyshape.empty
@@ -35,7 +34,7 @@ classdef simulator
                 options.fadePings = false
                 options.costConfig = struct('effector', 100, 'asset', 2000, 'leak', 250)
             end
-            obj.map = map; obj.AOR = aor; obj.UAS = uas; obj.effectors = effectors; obj.sensors = sensors; obj.assets = assets;
+            obj.map = map; obj.UAS = uas; obj.effectors = effectors; obj.sensors = sensors; obj.asset = asset;
             obj.tick = 0; obj.tps = options.tps; obj.dt = 1 / obj.tps;
             obj.animate = options.animate; obj.NFZs = options.nfzs; obj.resetGraphics = options.resetGraphics;
             obj.animationMultiplier = options.animationMultiplier; obj.hideClock = options.hideClock; obj.fadePings = options.fadePings; 
@@ -94,9 +93,10 @@ classdef simulator
                 effRanges = [obj.effectors.range]';
             end
             
-            hasAssets = ~isempty(obj.assets);
-            if hasAssets
-                assetLocs = reshape([obj.assets.location], 2, [])'; 
+            hasAsset = ~isempty(obj.asset);
+            if hasAsset
+                % Single asset location
+                assetLoc = obj.asset.location; 
             end
             
             terrainProxy = obj.map.terrainProxy;
@@ -105,7 +105,7 @@ classdef simulator
             
             track_hist = zeros(numUAS, req_pings); 
 
-            destroyedAssets = []; cost = 0; UASkilled = 0; UASkillLocations = []; outcomeLog = strings(0); 
+            isAssetDestroyed = false; cost = 0; UASkilled = 0; UASkillLocations = []; outcomeLog = strings(0); 
             
             % Initialize Graphics
             animate_on = obj.animate;
@@ -113,8 +113,8 @@ classdef simulator
                 if obj.resetGraphics
                     obj.map.wipeAnimation();
                 end
-                % Pass number of UAS to map
-                obj.map.startAnimation(obj.AOR, obj.assets, obj.effectors, obj.sensors, numUAS, obj.hideClock);
+                % Pass number of UAS to map (Removed AOR)
+                obj.map.startAnimation(obj.asset, obj.effectors, obj.sensors, numUAS, obj.hideClock);
                 UASsensedPos = [];
                 view(0,90)
             end
@@ -143,7 +143,7 @@ classdef simulator
                     elseif uasObj.mode == "HybridAStar"
                         uasObj.hybridAStarMotion(dt_local, tick_count, 3.0, obj.occMap)
                     elseif uasObj.mode == "Search"
-                        uasObj.searchMotion(dt_local, obj.assets, destroyedAssets, obj.NFZs);
+                        uasObj.searchMotion(dt_local, obj.asset, isAssetDestroyed, obj.NFZs);
                     end
                     pos = uasObj.position;
                     
@@ -183,13 +183,11 @@ classdef simulator
                         if any(d_eff <= effRanges); eventEffector = true; end
                     end
                     
-                    eventAsset = false; hitAssetID = 0;
-                    if hasAssets
-                        d_asset = sqrt((assetLocs(:,1) - pos(1)).^2 + (assetLocs(:,2) - pos(2)).^2);
-                        hitIdx = find(d_asset <= (uasObj.speed * dt_local)); 
-                        if ~isempty(hitIdx)
+                    eventAsset = false;
+                    if hasAsset
+                        d_asset = sqrt((assetLoc(1) - pos(1)).^2 + (assetLoc(2) - pos(2)).^2);
+                        if d_asset <= (uasObj.speed * dt_local)
                             eventAsset = true;
-                            hitAssetID = hitIdx(1);
                         end
                     end
                     
@@ -198,7 +196,7 @@ classdef simulator
                     
                     eventExit = (pos(1) < 1 || pos(1) > obj.map.size.horiz - 1 || pos(2) < 1 || pos(2) > obj.map.size.vert - 1);
                     if eventEffector
-                        cost = cost + cost_eff; 
+                        cost = cost + cost_eff*1/d_asset*tick_count/100; 
                         outcomeLog(end+1) = "Intercept";
                         UASkillLocations = [UASkillLocations; pos];
                         uasObj.active = false; 
@@ -211,16 +209,16 @@ classdef simulator
                         uasObj.active = false; uas_active(i) = false;
                         if animate_on; obj.map.animateUAScrashed(pos); end
                         
-                    elseif eventExit & destroyedAssets > 0
+                    elseif eventExit & isAssetDestroyed
                         cost = cost + cost_leak; outcomeLog(end+1) = "Escaped";
                         uasObj.active = false; uas_active(i) = false;
                         simComplete = true;
                         
                     elseif eventAsset
-                        if ~any(destroyedAssets == hitAssetID)
-                            destroyedAssets(end+1) = hitAssetID;
+                        if ~isAssetDestroyed
+                            isAssetDestroyed = true;
                             cost = cost + cost_asset; outcomeLog(end+1) = "AssetHit";
-                            if animate_on; obj.map.animateDestroyedAssets(obj.assets, destroyedAssets); end
+                            if animate_on; obj.map.animateDestroyedAsset(obj.asset); end
                             %simComplete = true; 
                         end
                     end
@@ -234,7 +232,7 @@ classdef simulator
                 end
             end
             results.UASPos_all = obj.UASPos_all;
-            results.destroyedAssets = destroyedAssets; 
+            results.isAssetDestroyed = isAssetDestroyed; 
             results.cost = cost; 
             results.UASkilled = UASkilled;
             results.UASkillLocations = UASkillLocations;
