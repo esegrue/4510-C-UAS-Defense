@@ -13,6 +13,9 @@ classdef map < handle
         assetDestroyed
         assets
         timeBox
+        
+        effectorDomes
+        effectorDots
     end
     
     methods
@@ -46,7 +49,6 @@ classdef map < handle
                     end
             end
             obj.terrain.X = X; obj.terrain.Y = Y; obj.terrain.Z = Z;
-            
             obj.terrainProxy = griddedInterpolant({y_vec, x_vec}, Z, 'linear', 'nearest');
         end
 
@@ -91,49 +93,72 @@ classdef map < handle
             obj.UAScrashed = plot3(NaN, NaN, NaN, 'Marker', 'x', 'Color', 'k', 'LineWidth', 2, 'MarkerSize', 15, 'DisplayName', "Terrain Crash");
             obj.assetDestroyed = plot3(NaN, NaN, NaN, 'Marker', 'x', 'Color', 'r', 'MarkerSize', 20, 'LineWidth', 2, 'DisplayName', "Asset Destroyed");
 
-            axesChildren = get(gca, 'Children');
-            axesMatch = findobj(axesChildren, 'DisplayName', "AOR");       
+            if ~hideClock
+                obj.timeBox = text(0.05*obj.size.vert, 0.95*obj.size.vert, 50, 't: 0s', ...
+                    'ColorMode', 'auto', 'EdgeColor', 'k', 'BackgroundColor', 'w');
+            end
 
-            if isempty(axesMatch)
-                % Removed AOR Plotting
+            x = asset.location(1); y = asset.location(2); z = obj.getElevation(x, y);
+            plot3(x, y, z+z_offset, 'Marker', 'square', 'Color', 'g', 'MarkerSize', 10, 'LineWidth', 2, 'LineStyle','none' , 'DisplayName', "Asset");
+            
+            % Initialize Effector graphics arrays
+            obj.effectorDomes = gobjects(1, length(effectors));
+            obj.effectorDots = gobjects(1, length(effectors));
 
-                if ~hideClock
-                    obj.timeBox = text(0.05*obj.size.vert, 0.95*obj.size.vert, 50, 't: 0s', ...
-                        'ColorMode', 'auto', 'EdgeColor', 'k', 'BackgroundColor', 'w');
-                end
-
-                % Single Asset Plotting
-                x = asset.location(1); y = asset.location(2); z = obj.getElevation(x, y);
-                plot3(x, y, z+z_offset, 'Marker', 'square', 'Color', 'g', 'MarkerSize', 10, 'LineWidth', 2, 'LineStyle','none' , 'DisplayName', "Asset");
-                
-                for i = 1:length(effectors)
-                    loc = effectors(i).location; range = effectors(i).range;
-                    obj.drawCoverageDome(loc, range, 'c');
-                    z = obj.getElevation(loc(1), loc(2));
-                    plot3(loc(1), loc(2), z+z_offset, '.', 'Color', 'c', 'DisplayName', "Effector " + i, 'MarkerSize', 20)
+            for i = 1:length(effectors)
+                loc = effectors(i).location; range = effectors(i).range;
+                color = 'c';
+                if isfield(effectors(i), 'mode') && effectors(i).mode == "MOBILE"
+                    color = 'b'; % Mobile units are blue
                 end
                 
-                for i = 1:length(sensors)
-                    loc = sensors(i).location; range = sensors(i).range;
-                    obj.drawCoverageDome(loc, range, 'm');
-                    z = obj.getElevation(loc(1), loc(2));
-                    plot3(loc(1), loc(2), z+z_offset, '.', 'Color', 'm', 'DisplayName', "Sensor " + i, 'MarkerSize', 20)
+                [th, phi] = meshgrid(linspace(0, 2*pi, 30), linspace(0, pi/2, 15));
+                [x_sphere, y_sphere, z_sphere] = sph2cart(th, phi, range);
+                x_sphere = x_sphere + loc(1); y_sphere = y_sphere + loc(2);
+                z_center = obj.getElevation(loc(1), loc(2));
+                z_sphere = z_sphere + z_center;
+                
+                obj.effectorDomes(i) = surf(x_sphere, y_sphere, z_sphere, 'FaceColor', color, 'EdgeColor', 'none', 'FaceAlpha', 0.15, 'DisplayName', "Effector Dome " + i);
+                obj.effectorDots(i) = plot3(loc(1), loc(2), z_center+z_offset, '.', 'Color', color, 'DisplayName', "Effector " + i, 'MarkerSize', 20);
+            end
+            
+            for i = 1:length(sensors)
+                loc = sensors(i).location; range = sensors(i).range;
+                [th, phi] = meshgrid(linspace(0, 2*pi, 30), linspace(0, pi/2, 15));
+                [x_sphere, y_sphere, z_sphere] = sph2cart(th, phi, range);
+                x_sphere = x_sphere + loc(1); y_sphere = y_sphere + loc(2);
+                z_center = obj.getElevation(loc(1), loc(2));
+                z_sphere = z_sphere + z_center;
+                surf(x_sphere, y_sphere, z_sphere, 'FaceColor', 'm', 'EdgeColor', 'none', 'FaceAlpha', 0.15, 'DisplayName', 'Sensor Coverage');
+                plot3(loc(1), loc(2), z_center+z_offset, '.', 'Color', 'm', 'DisplayName', "Sensor " + i, 'MarkerSize', 20)
+            end
+            
+            xlim([0,obj.size.horiz]); ylim([0,obj.size.vert]);
+        end
+
+        function updateEffectors(obj, effectors)
+            z_offset = 1;
+            for i = 1:length(effectors)
+                if isfield(effectors(i), 'mode') && effectors(i).mode == "MOBILE"
+                    loc = effectors(i).location;
+                    range = effectors(i).range;
+                    z_center = obj.getElevation(loc(1), loc(2));
+                    
+                    set(obj.effectorDots(i), 'XData', loc(1), 'YData', loc(2), 'ZData', z_center + z_offset);
+                    
+                    [th, phi] = meshgrid(linspace(0, 2*pi, 30), linspace(0, pi/2, 15));
+                    [x_sphere, y_sphere, z_sphere] = sph2cart(th, phi, range);
+                    x_sphere = x_sphere + loc(1); 
+                    y_sphere = y_sphere + loc(2);
+                    z_sphere = z_sphere + z_center;
+                    
+                    set(obj.effectorDomes(i), 'XData', x_sphere, 'YData', y_sphere, 'ZData', z_sphere);
                 end
             end
-            xlim([0,obj.size.horiz]); ylim([0,obj.size.vert]);
         end
 
         function animateUAScrashed(obj, position)
             set(obj.UAScrashed, 'XData', position(1), 'YData', position(2), 'ZData', position(3));
-        end
-
-        function drawCoverageDome(obj, pos, range, color)
-            [th, phi] = meshgrid(linspace(0, 2*pi, 30), linspace(0, pi/2, 15));
-            [x_sphere, y_sphere, z_sphere] = sph2cart(th, phi, range);
-            x_sphere = x_sphere + pos(1); y_sphere = y_sphere + pos(2);
-            z_center = obj.getElevation(pos(1), pos(2));
-            z_sphere = z_sphere + z_center;
-            surf(x_sphere, y_sphere, z_sphere, 'FaceColor', color, 'EdgeColor', 'none', 'FaceAlpha', 0.15, 'DisplayName', 'Coverage Dome');
         end
 
         function updateUASAnimation(obj, UASPos_all)

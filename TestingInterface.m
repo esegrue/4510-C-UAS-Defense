@@ -21,9 +21,11 @@ mapConfig.terrainMag = 5; % terrain height magnitude
 assetConfig.location = [30, 60]; % [X, Y] location of the asset
 
 % EFFECTOR SETTINGS
-effConfig.numEffectors = 3; % number of effectors to place
+effConfig.numStatic = 2; % number of static point-defense effectors
+effConfig.numMobile = 1; % number of mobile interceptor effectors
+effConfig.mobileSpeed = 12; % speed of mobile effectors (units/s)
 effConfig.range = 15; % interception radius (units)
-effConfig.posBankFile = "effector_posn_bank.mat"; % source file for positions
+effConfig.posBankFile = "effector_posn_bank.mat";
 
 % ADVERSARY SETTINGS
 advConfig.count = 4; % number of incoming threats
@@ -44,7 +46,7 @@ costConfig.asset = 2000; % cost if asset is destroyed
 costConfig.leak = 250; % cost per adversary not intercepted
 
 % SIMULATION ENGINE SETTINGS
-simConfig.parallel = true; % run parallelized (no animation) or sequential loop
+simConfig.parallel = false; % run parallelized (no animation) or sequential loop
 simConfig.tps = 20; % time steps per second
 simConfig.animateLive = false; % animate? (slows down processing)
 
@@ -96,8 +98,10 @@ for i = 1:sensConfig.count
 end
 
 % define effector template
-effectorStructTemplate = struct('location', [0,0], 'range', effConfig.range);
-
+effConfig.totalEffectors = effConfig.numStatic + effConfig.numMobile;
+effectorStructTemplate = struct('location', [0,0], 'range', effConfig.range, ...
+    'mode', "STATIC", 'speed', 0, 'heading', 0, 'planner', [], ...
+    'path', [], 'pathIdx', 1, 'lastPlanTick', -inf, 'lastInterceptPose', [nan nan nan]);
 
 %% MONTE CARLO SIMULATION
 % -----------------------
@@ -109,12 +113,19 @@ while numConfigs < mcSettings.maxConfigs
     numConfigs = numConfigs + 1;
     
     % 1. GENERATE EFFECTORS
-    randIndices = randperm(size(effector_posns_bank, 1), effConfig.numEffectors);
+    randIndices = randperm(size(effector_posns_bank, 1), effConfig.totalEffectors);
     effPos = effector_posns_bank(randIndices, :);
     
-    currentEffectors = repmat(effectorStructTemplate, effConfig.numEffectors, 1);
-    for e = 1:effConfig.numEffectors
+    currentEffectors = repmat(effectorStructTemplate, effConfig.totalEffectors, 1);
+    for e = 1:effConfig.totalEffectors
         currentEffectors(e).location = effPos(e, :);
+        if e <= effConfig.numStatic
+            currentEffectors(e).mode = "STATIC";
+            currentEffectors(e).speed = 0;
+        else
+            currentEffectors(e).mode = "MOBILE";
+            currentEffectors(e).speed = effConfig.mobileSpeed;
+        end
     end
     configStore{numConfigs} = currentEffectors;
 
@@ -254,7 +265,7 @@ SimResults.Metadata = struct(...
     'MapBounds', mapBounds, ...
     'NumAdversaries', advConfig.count, ...
     'NumSensors', sensConfig.count, ...
-    'NumEffectors', effConfig.numEffectors, ...
+    'NumEffectors', effConfig.totalEffectors, ...
     'CostConfig', costConfig, ...
     'ReliabilityThreshold', mcSettings.reliabilityThresh, ...
     'SensorParams', sensConfig.params, ...

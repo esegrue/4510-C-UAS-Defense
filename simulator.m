@@ -1,4 +1,4 @@
-classdef simulator
+classdef simulator < handle
     properties
         map
         UAS
@@ -40,24 +40,23 @@ classdef simulator
             obj.animationMultiplier = options.animationMultiplier; obj.hideClock = options.hideClock; obj.fadePings = options.fadePings; 
             obj.costConfig = options.costConfig;
 
-            %defining NFZs based on elevation
+            % defining NFZs based on elevation
             mapL = obj.map.size.vert;
             mapW = obj.map.size.horiz;
             costmap = zeros(mapW+1, mapL+1);
             if ~isempty(obj.UAS) && isprop(obj.UAS(1), 'altitude')
                 flightAlt = obj.UAS(1).altitude;
             else
-                flightAlt = 25; % fallback
+                flightAlt = 25; 
             end
             for x = 0:1:mapW
                 for y = 0:1:mapL
-                    costmap(x+1,y+1) = obj.map.getElevation(x,y) > flightAlt; %arbitrary height
+                    costmap(x+1,y+1) = obj.map.getElevation(x,y) > flightAlt;
                 end
             end
             
-            obj.occMap = binaryOccupancyMap(fliplr(costmap)); %map mirrors for some reason
+            obj.occMap = binaryOccupancyMap(fliplr(costmap));
 
-            
             % Initialize history for N UAS
             obj.UASPos_all = cell(1, length(obj.UAS));
             for i = 1:length(obj.UAS)
@@ -89,18 +88,16 @@ classdef simulator
                 scan_rate = p(1).scanRate;
                 sensorLocs = reshape([obj.sensors.location], 2, [])'; 
             else
-                scan_rate = 1;
+                scan_rate = 1; req_pings = 1;
             end
 
             hasEffectors = ~isempty(obj.effectors3D);
             if hasEffectors
-                effLocs = obj.effectors3D;
                 effRanges = [obj.effectors.range]';
             end
             
             hasAsset = ~isempty(obj.asset);
             if hasAsset
-                % Single asset location
                 assetLoc = obj.asset.location; 
             end
             
@@ -112,13 +109,9 @@ classdef simulator
 
             isAssetDestroyed = false; cost = 0; UASkilled = 0; UASkillLocations = []; outcomeLog = strings(0); 
             
-            % Initialize Graphics
             animate_on = obj.animate;
             if animate_on
-                if obj.resetGraphics
-                    obj.map.wipeAnimation();
-                end
-                % Pass number of UAS to map (Removed AOR)
+                if obj.resetGraphics; obj.map.wipeAnimation(); end
                 obj.map.startAnimation(obj.asset, obj.effectors, obj.sensors, numUAS, obj.hideClock);
                 UASsensedPos = [];
                 view(0,90)
@@ -135,19 +128,19 @@ classdef simulator
             while ~simComplete
                 simComplete = true; 
                 tick_count = tick_count + 1;
+                obj.tick = tick_count;
                 currentTime = tick_count * dt_local;
                 
-                % check sensor scan tick
                 timeSinceLastScan = mod(currentTime, scan_rate);
                 isScanTick = (timeSinceLastScan < dt_local/2) || (abs(timeSinceLastScan - scan_rate) < dt_local/2);
                 
+                targetFound = false; targetPos = []; targetObj = [];
+
+                % 1. SENSE & MOVE UAS
                 for i = 1:numUAS
-                    if ~uas_active(i)
-                        continue;
-                    end
+                    if ~uas_active(i); continue; end
                     simComplete = false;
                     
-                    % 1. MOVE UAS
                     uasObj = obj.UAS(i);
                     if uasObj.mode == "Linear"
                         uasObj.linearMotion(dt_local);
@@ -166,34 +159,51 @@ classdef simulator
                         obj.UASPos_all{i}(target_idx,:) = pos;
                     end
                     
-                    % 2. CHECK SENSOR TRACKING
-                    isTracked = false;
-                    isPinged = false;
-                    
+                    isTracked = false; isPinged = false;
                     if hasSensors && isScanTick
                         d_sens = sqrt((sensorLocs(:,1) - pos(1)).^2 + (sensorLocs(:,2) - pos(2)).^2);
                         raw_probs = 1 ./ (1 + exp((d_sens - sensorD50') ./ sensorK'));
-                        probs = min(raw_probs, 0.90); % Cap probability at 90%
-                        
-                        if any(probs >= rand(size(probs)))
-                            isPinged = true;
-                        end
-                        
+                        probs = min(raw_probs, 0.90); 
+                        if any(probs >= rand(size(probs))); isPinged = true; end
                         track_hist(i, :) = [track_hist(i, 2:end), isPinged];
                     end
                     
-                    if sum(track_hist(i,:)) >= req_pings
-                        isTracked = true;
-                    end
+                    if sum(track_hist(i,:)) >= req_pings; isTracked = true; end
                     
                     if isPinged && animate_on
                          UASsensedPos = cat(1, UASsensedPos, [currentTime, pos]);
                          obj.map.animateUASsensed(UASsensedPos);
                     end
+
+                    % Target designation for mobile effectors (Grabs closest tracked)
+                    if isTracked && ~targetFound
+                        targetFound = true;
+                        targetPos = pos(1:2);
+                        targetObj = uasObj;
+                    end
+                end 
+
+                % 2. MOVE EFFECTORS
+                if targetFound && hasEffectors
+                    obj.stepEffectors_(targetPos, targetObj);
                     
-                    % 3. CHECK COLLISIONS
+                    % Update 3D array for collision checking
+                    for k = 1:length(obj.effectors)
+                        loc = obj.effectors(k).location;
+                        z = terrainProxy(loc(2), loc(1)); 
+                        obj.effectors3D(k, :) = [loc(1), loc(2), z];
+                    end
+                end
+                
+                % 3. CHECK COLLISIONS
+                for i = 1:numUAS
+                    if ~uas_active(i); continue; end
+                    pos = obj.UAS(i).position;
+                    uasObj = obj.UAS(i);
+
                     eventEffector = false;
-                    if isTracked && hasEffectors
+                    if sum(track_hist(i,:)) >= req_pings && hasEffectors
+                        effLocs = obj.effectors3D;
                         d_eff = sqrt(sum((effLocs - pos).^2, 2));
                         if any(d_eff <= effRanges); eventEffector = true; end
                     end
@@ -201,21 +211,19 @@ classdef simulator
                     eventAsset = false;
                     if hasAsset
                         d_asset = sqrt((assetLoc(1) - pos(1)).^2 + (assetLoc(2) - pos(2)).^2);
-                        if d_asset <= (uasObj.speed * dt_local)
-                            eventAsset = true;
-                        end
+                        if d_asset <= (uasObj.speed * dt_local); eventAsset = true; end
                     end
                     
                     z_terr = terrainProxy(pos(2), pos(1)); 
                     eventCrash = (pos(3) <= z_terr);
-                    
                     eventExit = tick_count > 10 && ((pos(1) <= 0) || (pos(1) >= obj.map.size.horiz) || (pos(2) <= 0) || (pos(2) >= obj.map.size.vert));
+                    
                     if eventEffector
-                        cost = cost + cost_eff*1/d_asset*tick_count/100; 
+                        % Time-invariant cost calculation
+                        cost = cost + cost_eff*1/d_asset*currentTime; 
                         outcomeLog(end+1) = "Intercept";
                         UASkillLocations = [UASkillLocations; pos];
-                        uasObj.active = false; 
-                        uas_active(i) = false; 
+                        uasObj.active = false; uas_active(i) = false; 
                         UASkilled = UASkilled + 1;
                         if animate_on; obj.map.animateUASkilled(pos); end
                         
@@ -233,15 +241,15 @@ classdef simulator
                             isAssetDestroyed = true;
                             cost = cost + cost_asset; outcomeLog(end+1) = "AssetHit";
                             if animate_on; obj.map.animateDestroyedAsset(obj.asset); end
-                            %simComplete = true; 
                         end
                     end
-                end 
+                end
                 
-                % 3. UPDATE ANIMATION
+                % 4. UPDATE ANIMATION
                 if animate_on
                     pause(dt_local/obj.animationMultiplier);
                     obj.map.updateUASAnimation(obj.UASPos_all);
+                    if hasEffectors; obj.map.updateEffectors(obj.effectors); end
                     if ~obj.hideClock; obj.map.updateClock(currentTime); end
                 end
             end
@@ -260,6 +268,107 @@ classdef simulator
             results.UASkillLocations = UASkillLocations;
             results.outcomeLog = outcomeLog;
             results.tick = tick_count;
+        end
+    end
+
+    methods (Access = private)
+        function stepEffectors_(obj, targetPosXY, targetObj)
+            xMin = obj.occMap.XWorldLimits(1);
+            xMax = obj.occMap.XWorldLimits(2);
+            yMin = obj.occMap.YWorldLimits(1);
+            yMax = obj.occMap.YWorldLimits(2);
+
+            for e = 1:numel(obj.effectors)
+                eff = obj.effectors(e);
+                if eff.mode == "STATIC"; continue; end
+
+                step = eff.speed * obj.dt;
+                replanEveryTicks = 30;
+                replanDist = 5.0;
+
+                interceptPose = obj.predictIntercept_(targetPosXY, targetObj);
+
+                if isempty(eff.planner)
+                    ss = stateSpaceSE2;
+                    ss.StateBounds = [xMin xMax; yMin yMax; -pi pi];
+                    sv = validatorOccupancyMap(ss);
+                    sv.Map = obj.occMap;
+                    sv.ValidationDistance = 0.5;
+                    eff.planner = plannerHybridAStar(sv, 'MinTurningRadius', 3.0, "InterpolationDistance", step);
+                end
+
+                if all(isfinite(eff.lastInterceptPose))
+                    interceptMoved = norm(interceptPose(1:2) - eff.lastInterceptPose(1:2)) >= replanDist;
+                else
+                    interceptMoved = true;
+                end
+
+                needReplan = (isempty(eff.path) || (obj.tick - eff.lastPlanTick) >= replanEveryTicks || interceptMoved);
+
+                if needReplan
+                    startPose = [eff.location eff.heading];
+                    try
+                        pathObj = plan(eff.planner, startPose, interceptPose);
+                        if isprop(pathObj, "States") && ~isempty(pathObj.States)
+                            eff.path = pathObj.States;
+                            eff.pathIdx = 2; 
+                        else
+                            eff.path = []; eff.pathIdx = 1;
+                        end
+                    catch
+                        eff.path = []; eff.pathIdx = 1;
+                    end
+                    eff.lastPlanTick = obj.tick;
+                    eff.lastInterceptPose = interceptPose;
+                end
+
+                moved = false;
+                if ~isempty(eff.path)
+                    idx = max(1, min(eff.pathIdx, size(eff.path, 1)));
+                    nextPose = eff.path(idx, :);
+
+                    if all(isfinite(nextPose))
+                        eff.location = nextPose(1:2);
+                        eff.heading = nextPose(3);
+                        eff.pathIdx = eff.pathIdx + 1;
+                        if eff.pathIdx > size(eff.path, 1)
+                            eff.path = []; eff.pathIdx = 1;
+                        end
+                        moved = true;
+                    else
+                        eff.path = [];
+                    end
+                end
+
+                % Fallback vector movement if A* fails
+                if ~moved
+                    goal = interceptPose(1:2);
+                    v = goal - eff.location;
+                    nv = norm(v);
+                    if nv > 1e-9
+                        dir = v / nv;
+                        newLoc = eff.location + step * dir;
+                        newLoc(1) = min(max(newLoc(1), xMin), xMax);
+                        newLoc(2) = min(max(newLoc(2), yMin), yMax);
+                        eff.location = newLoc;
+                        eff.heading = atan2(dir(2), dir(1));
+                    end
+                end
+                obj.effectors(e) = eff;
+            end
+        end
+
+        function interceptPose = predictIntercept_(~, targetPosXY, targetObj)
+            lookahead = 2.0; vhat = [1 0];
+            if isprop(targetObj, "targetUnitVector")
+                v = targetObj.targetUnitVector(1:2);
+                if norm(v) > 0; vhat = v / norm(v); end
+            end
+            spd = 0;
+            if isprop(targetObj, "speed"); spd = targetObj.speed; end
+            ip = targetPosXY + vhat * spd * lookahead;
+            hdg = atan2(vhat(2), vhat(1));
+            interceptPose = [ip, hdg];
         end
     end
 end
