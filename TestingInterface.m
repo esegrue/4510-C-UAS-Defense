@@ -5,8 +5,8 @@ clear; clc; close all;
 %  -------------------
 
 % OPTIMIZATION SETTINGS
-mcSettings.maxConfigs = 200; % max number of effector configs to test
-mcSettings.testsPerConfig = 1; %  trials per configuration
+mcSettings.maxConfigs = 5; % max number of effector configs to test
+mcSettings.testsPerConfig = 5; %  trials per configuration
 mcSettings.convergenceDelta = 100; % stop if separation > delta
 mcSettings.confidenceAlpha = 0.1; % Student's t-test alpha (0.1 = 90% conf)
 mcSettings.reliabilityThresh = 90; % minimum reliability (%) to be valid
@@ -15,26 +15,27 @@ mcSettings.reliabilityThresh = 90; % minimum reliability (%) to be valid
 mapConfig.L = 100; % map Length (units)
 mapConfig.W = 100; % map Width (units)
 mapConfig.terrainType = 'Hills'; % terrain generation type ('Flat')
-mapConfig.terrainMag = 30; % terrain height magnitude
+mapConfig.terrainMag = 5; % terrain height magnitude
 
 % ASSET LOCATION
 assetConfig.location = [30, 60]; % [X, Y] location of the asset
 
 % EFFECTOR SETTINGS
 effConfig.numEffectors = 3; % number of effectors to place
-effConfig.range = 20; % interception radius (units)
+effConfig.range = 15; % interception radius (units)
 effConfig.posBankFile = "effector_posn_bank.mat"; % source file for positions
 
 % ADVERSARY SETTINGS
-advConfig.count = 20; % number of incoming threats
+advConfig.count = 4; % number of incoming threats
 advConfig.speed = 15; % UAS Speed (units/s)
-advConfig.turnRadius = 25; % UAS Turn Radius (units)
+advConfig.turnRadius = 3; % UAS Turn Radius (units)
+advConfig.altitude = 10; % UAS Ingress Altitude (units)
 advConfig.planner = 'HybridAStar'; % path planning algorithm ('linear')
 
 % SENSOR SETTINGS
 sensConfig.count = 3; % number of sensors
 sensConfig.locations = [30,85; 8.35,47.5; 51.65,47.5]; % [X1,Y1; Xn,Yn] location of sensors
-sensConfig.range = 25; % detection radius (units)
+sensConfig.range = 15; % detection radius (units)
 sensConfig.params = struct('d50', 25, 'k', 10, 'pings', 3, 'duration', 1.0, 'scanRate', 0.2);
 
 % COST FUNCTION SETTINGS
@@ -43,12 +44,15 @@ costConfig.asset = 2000; % cost if asset is destroyed
 costConfig.leak = 250; % cost per adversary not intercepted
 
 % SIMULATION ENGINE SETTINGS
+simConfig.parallel = true; % run parallelized (no animation) or sequential loop
 simConfig.tps = 20; % time steps per second
 simConfig.animateLive = false; % animate? (slows down processing)
 
 
 %% SIMULATION SETUP
 % -----------------
+
+rng('shuffle')
 
 % define map
 mapBounds = [0 mapConfig.L 0 mapConfig.W];
@@ -57,6 +61,7 @@ mapObj.generateTerrain(mapConfig.terrainType, mapConfig.terrainMag);
 xlims = [0 mapConfig.L]; ylims = [0 mapConfig.W];
 
 % storage arrays
+trialSeeds = randi([1, 2^31-1], mcSettings.maxConfigs, mcSettings.testsPerConfig);
 configStore = cell(mcSettings.maxConfigs, 1);      
 scenarioStore = cell(mcSettings.maxConfigs, 1);    
 costDetailsStore = cell(mcSettings.maxConfigs, 1); 
@@ -67,6 +72,7 @@ ReliabilityScore = nan(mcSettings.maxConfigs, 1);
 LCB = nan(mcSettings.maxConfigs, 1); 
 UCB = nan(mcSettings.maxConfigs, 1); 
 separation = nan(mcSettings.maxConfigs, 1);
+
 
 % load position and path banks
 if isfile(effConfig.posBankFile)
@@ -103,7 +109,7 @@ while numConfigs < mcSettings.maxConfigs
     numConfigs = numConfigs + 1;
     
     % 1. GENERATE EFFECTORS
-    randIndices = randi(size(effector_posns_bank, 1), [1, effConfig.numEffectors]);
+    randIndices = randperm(size(effector_posns_bank, 1), effConfig.numEffectors);
     effPos = effector_posns_bank(randIndices, :);
     
     currentEffectors = repmat(effectorStructTemplate, effConfig.numEffectors, 1);
@@ -115,36 +121,69 @@ while numConfigs < mcSettings.maxConfigs
     % 2. INITIALIZE STORAGE
     runCosts = zeros(mcSettings.testsPerConfig, 1); 
     runStarts = cell(mcSettings.testsPerConfig, 1);
-    runFailures = 0;
-    currentConfigKills = [];
+    runFailures = zeros(mcSettings.testsPerConfig, 1);
+    runKills = cell(mcSettings.testsPerConfig, 1);
     
     % 3. RUN TESTS
-    for j = 1:mcSettings.testsPerConfig
-        starts = ingressPosns(xlims, ylims, advConfig.count);
-        
-        runSeed = numConfigs*1000 + j;
-        rng(runSeed);
+    if simConfig.parallel
+        parfor j = 1:mcSettings.testsPerConfig
 
-        uasArray = UAS.empty(0, advConfig.count);
-        for k = 1:advConfig.count
-            uasArray(k) = UAS(advConfig.speed, starts(k,:), asset.location, ...
-                              advConfig.planner, advConfig.turnRadius);
-        end
-        
-        sim = simulator(mapObj, uasArray, currentEffectors, sensors, asset, 'tps', simConfig.tps, 'animate', simConfig.animateLive, 'nfzs', polyshape.empty, 'resetGraphics', true, 'costConfig', costConfig);
-        runResults = sim.runSim();
-        
-        runCosts(j) = runResults.cost; 
-        runStarts{j} = starts;
-        
-        if isfield(runResults, 'UASkillLocations') && ~isempty(runResults.UASkillLocations)
-            currentConfigKills = [currentConfigKills; runResults.UASkillLocations];
-        end
+            rng(trialSeeds(numConfigs, j), 'twister');
 
-        if runResults.cost >= costConfig.asset
-            runFailures = runFailures + 1;
+            starts = ingressPosns(xlims, ylims, advConfig.count);
+            uasArray = UAS.empty(0, advConfig.count);
+            for k = 1:advConfig.count
+                while mapObj.getElevation(starts(k,1), starts(k,2)) >= advConfig.altitude
+                    starts(k,:) = ingressPosns(xlims, ylims, 1);
+                end
+                uasArray(k) = UAS(advConfig.speed, starts(k,:), asset.location, advConfig.planner, advConfig.altitude, advConfig.turnRadius);
+            end
+            sim = simulator(mapObj, uasArray, currentEffectors, sensors, asset, 'tps', simConfig.tps, 'animate', false, 'nfzs', polyshape.empty, 'resetGraphics', false, 'costConfig', costConfig);
+            runResults = sim.runSim();
+
+            runCosts(j) = runResults.cost;
+            runStarts{j} = starts;
+
+            if isfield(runResults, 'UASkillLocations') && ~isempty(runResults.UASkillLocations)
+                runKills{j} = runResults.UASkillLocations;
+            end
+    
+            if runResults.cost >= costConfig.asset
+                runFailures(j) = 1;
+            end
+        end
+    else
+        for j = 1:mcSettings.testsPerConfig
+
+            rng(trialSeeds(numConfigs, j), 'twister');
+    
+            starts = ingressPosns(xlims, ylims, advConfig.count);
+            uasArray = UAS.empty(0, advConfig.count);
+            for k = 1:advConfig.count
+                while mapObj.getElevation(starts(k,1), starts(k,2)) >= advConfig.altitude
+                    starts(k,:) = ingressPosns(xlims, ylims, 1);
+                end
+                uasArray(k) = UAS(advConfig.speed, starts(k,:), asset.location, advConfig.planner, advConfig.altitude, advConfig.turnRadius);
+            end
+            
+            sim = simulator(mapObj, uasArray, currentEffectors, sensors, asset, 'tps', simConfig.tps, 'animate', simConfig.animateLive, 'nfzs', polyshape.empty, 'resetGraphics', true, 'costConfig', costConfig);
+            runResults = sim.runSim();
+            
+            runCosts(j) = runResults.cost; 
+            runStarts{j} = starts;
+            
+            if isfield(runResults, 'UASkillLocations') && ~isempty(runResults.UASkillLocations)
+                runKills{j} = runResults.UASkillLocations;
+            end
+    
+            if runResults.cost >= costConfig.asset
+                runFailures(j) = 1;
+            end
         end
     end
+
+    currentConfigKills = vertcat(runKills{:});
+    runFailures = sum(runFailures);
     
     % 4. STORE CONFIGURATION RESULTS
     scenarioStore{numConfigs} = runStarts;
@@ -158,7 +197,7 @@ while numConfigs < mcSettings.maxConfigs
     
     % Student's t-distribution
     if mcSettings.testsPerConfig > 1
-        SD = std(runCosts, 1); 
+        SD = std(runCosts, 0); 
         SE = SD/sqrt(mcSettings.testsPerConfig); 
         tcrit = tinv(1 - mcSettings.confidenceAlpha/2, mcSettings.testsPerConfig - 1);
         LCB(numConfigs) = CostperCombo(numConfigs) - tcrit*SE;
@@ -220,7 +259,8 @@ SimResults.Metadata = struct(...
     'ReliabilityThreshold', mcSettings.reliabilityThresh, ...
     'SensorParams', sensConfig.params, ...
     'EffectorRange', effConfig.range, ...
-    'MCSettings', mcSettings ... 
+    'MCSettings', mcSettings, ... 
+    'advConfig', advConfig ...
 );
 
 SimResults.MapData = mapObj; 
@@ -241,7 +281,7 @@ for i = 1:numConfigs
     % trial settings
     SimResults.Configs(i).Trials = struct();
     for t = 1:mcSettings.testsPerConfig
-        SimResults.Configs(i).Trials(t).Seed = i*1000 + t;
+        SimResults.Configs(i).Trials(t).Seed = trialSeeds(i, t);
         SimResults.Configs(i).Trials(t).Starts = scenarioStore{i}{t};
         SimResults.Configs(i).Trials(t).Cost = costDetailsStore{i}(t);
     end

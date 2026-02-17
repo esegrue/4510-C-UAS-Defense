@@ -173,7 +173,6 @@ grid off; hold off;
 %% SCENARIO RELIABILITY DISTRIBUTION
 % ---------------------------
 
-
 figure('Name', 'Reliability Distribution', 'Position', [100 100 600 400]);
 hold on; grid on;
 bestTrials = SimResults.Configs(bestID).Trials;
@@ -212,9 +211,10 @@ trialsToReplay = SimResults.Configs(targetID).Trials;
 numReplays = length(trialsToReplay);
 
 for k = 1:numReplays
+
     % obtaining replay seed and inputs
     replaySeed = trialsToReplay(k).Seed;
-    rng(replaySeed);
+    rng(replaySeed, 'twister');
 
     replayStartPos = trialsToReplay(k).Starts;
     numAdversaries = SimResults.Metadata.NumAdversaries;
@@ -222,16 +222,17 @@ for k = 1:numReplays
     % redefine UAS
     uasArray = UAS.empty(0, numAdversaries);
     
-    if isfield(SimResults.Metadata, 'MCSettings')
-        uSpeed = SimResults.Metadata.MCSettings.advConfig.speed;
-        uTurn = SimResults.Metadata.MCSettings.advConfig.turnRadius;
-        uPlan = SimResults.Metadata.MCSettings.advConfig.planner;
+    if isfield(SimResults.Metadata, 'advConfig')
+        uSpeed = SimResults.Metadata.advConfig.speed;
+        uTurn = SimResults.Metadata.advConfig.turnRadius;
+        uPlan = SimResults.Metadata.advConfig.planner;
+        uAlt = SimResults.Metadata.advConfig.altitude;
     else
         uSpeed = 15; uTurn = 25; uPlan = 'HybridAStar';
     end
     
     for u = 1:numAdversaries
-        uasArray(u) = UAS(uSpeed, replayStartPos(u,:), asset.location, uPlan, uTurn);
+        uasArray(u) = UAS(uSpeed, replayStartPos(u,:), asset.location, uPlan, uAlt, uTurn);
     end
     
     % redefine simulator

@@ -43,10 +43,15 @@ classdef simulator
             %defining NFZs based on elevation
             mapL = obj.map.size.vert;
             mapW = obj.map.size.horiz;
-            costmap = zeros(mapL+1, mapW+1);
-            for x = 0:1:mapL
-                for y = 0:1:mapW
-                    costmap(x+1,y+1) = obj.map.getElevation(x,y) > 20; %arbitrary height
+            costmap = zeros(mapW+1, mapL+1);
+            if ~isempty(obj.UAS) && isprop(obj.UAS(1), 'altitude')
+                flightAlt = obj.UAS(1).altitude;
+            else
+                flightAlt = 25; % fallback
+            end
+            for x = 0:1:mapW
+                for y = 0:1:mapL
+                    costmap(x+1,y+1) = obj.map.getElevation(x,y) > flightAlt; %arbitrary height
                 end
             end
             
@@ -120,7 +125,13 @@ classdef simulator
             end
             
             simComplete = false; tick_count = 0;
-            
+            max_expected_ticks = 10000;
+            if animate_on
+                for i = 1:numUAS
+                    obj.UASPos_all{i} = [obj.UASPos_all{i}; NaN(max_expected_ticks, 3)];
+                end
+            end
+
             while ~simComplete
                 simComplete = true; 
                 tick_count = tick_count + 1;
@@ -141,14 +152,18 @@ classdef simulator
                     if uasObj.mode == "Linear"
                         uasObj.linearMotion(dt_local);
                     elseif uasObj.mode == "HybridAStar"
-                        uasObj.hybridAStarMotion(dt_local, tick_count, 3.0, obj.occMap)
+                        uasObj.hybridAStarMotion(dt_local, tick_count, uasObj.turnRadius, obj.occMap)
                     elseif uasObj.mode == "Search"
                         uasObj.searchMotion(dt_local, obj.asset, isAssetDestroyed, obj.NFZs);
                     end
                     pos = uasObj.position;
                     
                     if animate_on
-                        obj.UASPos_all{i} = cat(1, obj.UASPos_all{i}, pos);
+                        target_idx = tick_count + 1;
+                        if target_idx > size(obj.UASPos_all{i}, 1)
+                            obj.UASPos_all{i} = [obj.UASPos_all{i}; NaN(1000,3)];
+                        end
+                        obj.UASPos_all{i}(target_idx,:) = pos;
                     end
                     
                     % 2. CHECK SENSOR TRACKING
@@ -194,7 +209,7 @@ classdef simulator
                     z_terr = terrainProxy(pos(2), pos(1)); 
                     eventCrash = (pos(3) <= z_terr);
                     
-                    eventExit = (pos(1) < 1 || pos(1) > obj.map.size.horiz - 1 || pos(2) < 1 || pos(2) > obj.map.size.vert - 1);
+                    eventExit = tick_count > 10 && ((pos(1) <= 0) || (pos(1) >= obj.map.size.horiz) || (pos(2) <= 0) || (pos(2) >= obj.map.size.vert));
                     if eventEffector
                         cost = cost + cost_eff*1/d_asset*tick_count/100; 
                         outcomeLog(end+1) = "Intercept";
@@ -209,10 +224,9 @@ classdef simulator
                         uasObj.active = false; uas_active(i) = false;
                         if animate_on; obj.map.animateUAScrashed(pos); end
                         
-                    elseif eventExit & isAssetDestroyed
+                    elseif eventExit
                         cost = cost + cost_leak; outcomeLog(end+1) = "Escaped";
                         uasObj.active = false; uas_active(i) = false;
-                        simComplete = true;
                         
                     elseif eventAsset
                         if ~isAssetDestroyed
@@ -231,6 +245,14 @@ classdef simulator
                     if ~obj.hideClock; obj.map.updateClock(currentTime); end
                 end
             end
+            
+            if animate_on
+                for i = 1:numUAS
+                    valid_rows = ~isnan(obj.UASPos_all{i}(:,1));
+                    obj.UASPos_all{i} = obj.UASPos_all{i}(valid_rows,:);
+                end
+            end
+
             results.UASPos_all = obj.UASPos_all;
             results.isAssetDestroyed = isAssetDestroyed; 
             results.cost = cost; 

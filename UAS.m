@@ -12,6 +12,7 @@ classdef UAS < handle
         totalAsset
         tempSpeed
         altitude
+        turnRadius
 
         pathPoints
         pathHeadings
@@ -21,9 +22,10 @@ classdef UAS < handle
     end
 
     methods
-        function obj = UAS(speed, entrance, target, mode, altitude)
+        function obj = UAS(speed, entrance, target, mode, altitude, turnRadius)
             obj.speed = speed;
             obj.altitude = altitude;
+            obj.turnRadius = turnRadius;
             obj.position = [entrance(1), entrance(2), altitude];
             obj.target = target;
             obj.mode = mode;
@@ -70,7 +72,7 @@ classdef UAS < handle
                     else %reached end of path, now escape
                         positionxy = [obj.position(1), obj.position(2)];
                         posEsc = [costMap.XWorldLimits(1), obj.position(2); obj.position(1), costMap.YWorldLimits(1); costMap.XWorldLimits(2), obj.position(2); obj.position(1), costMap.YWorldLimits(2)];
-                        [~, Iesc] = min(sum(posEsc - positionxy, 2), [], "ComparisonMethod", "abs");
+                        [~, Iesc] = min(sum((posEsc - positionxy).^2, 2));
                         obj.target = posEsc(Iesc, :);
                         refPath = plan(obj.planner, [positionxy, obj.heading], [obj.target, obj.heading]);
                         obj.pathPoints = refPath.States(:, 1:2);  % Just x,y coordinates
