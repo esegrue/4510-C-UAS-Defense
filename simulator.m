@@ -6,7 +6,6 @@ classdef simulator < handle
         effectors
         sensors
         asset
-
         tick
         dt
         tps
@@ -107,6 +106,11 @@ classdef simulator < handle
             
             track_hist = zeros(numUAS, req_pings); 
 
+            detectionData = cell(numUAS, 1);
+            for i = 1:numUAS
+                detectionData{i} = [];
+            end
+
             isAssetDestroyed = false; cost = 0; UASkilled = 0; UASkillLocations = []; outcomeLog = strings(0); 
             
             animate_on = obj.animate;
@@ -163,11 +167,12 @@ classdef simulator < handle
                     if hasSensors && isScanTick
                         d_sens = sqrt((sensorLocs(:,1) - pos(1)).^2 + (sensorLocs(:,2) - pos(2)).^2);
                         raw_probs = 1 ./ (1 + exp((d_sens - sensorD50') ./ sensorK'));
-                        probs = min(raw_probs, 0.90); 
+                        probs = min(raw_probs, 0.90);
                         if any(probs >= rand(size(probs))); isPinged = true; end
                         track_hist(i, :) = [track_hist(i, 2:end), isPinged];
+                        detectionData{i} = [detectionData{i}; pos(1:2), max(probs), isPinged];
                     end
-                    
+
                     if sum(track_hist(i,:)) >= req_pings; isTracked = true; end
                     
                     if isPinged && animate_on
@@ -268,6 +273,7 @@ classdef simulator < handle
             results.UASkillLocations = UASkillLocations;
             results.outcomeLog = outcomeLog;
             results.tick = tick_count;
+            results.detectionData = detectionData;
         end
     end
 
