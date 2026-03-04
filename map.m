@@ -73,7 +73,9 @@ classdef map < handle
             xlabel("X (m)"); ylabel("Y (m)"); zlabel("Elevation (m)");
         end
 
-        function startAnimation(obj, asset, effectors, sensors, numUAS, hideClock)
+        function startAnimation(obj, asset, effectors, sensors, numUAS, hideClock, nfzs)
+            if nargin < 7; nfzs = polyshape.empty; end
+
             if isempty(get(groot, 'CurrentFigure'))
                 figure('Name', 'Simulation Animation', 'Position', [100 100 600 400]);
             end
@@ -101,6 +103,16 @@ classdef map < handle
             x = asset.location(1); y = asset.location(2); z = obj.getElevation(x, y);
             plot3(x, y, z+z_offset, 'Marker', 'square', 'Color', 'g', 'MarkerSize', 10, 'LineWidth', 2, 'LineStyle','none' , 'DisplayName', "Asset");
             
+            % Draw No-Fly Zones
+            for n = 1:length(nfzs)
+                [vx, vy] = boundary(nfzs(n));
+                vz = zeros(size(vx));
+                for v = 1:length(vx)
+                    vz(v) = obj.getElevation(vx(v), vy(v)) + z_offset;
+                end
+                fill3(vx, vy, vz, 'r', 'FaceAlpha', 0.4, 'EdgeColor', 'w', 'LineWidth', 1.5, 'DisplayName', 'No-Fly Zone');
+            end
+
             % Initialize Effector graphics arrays
             obj.effectorDomes = gobjects(1, length(effectors));
             obj.effectorDots = gobjects(1, length(effectors));
@@ -109,7 +121,7 @@ classdef map < handle
                 loc = effectors(i).location; range = effectors(i).range;
                 color = 'c';
                 if isfield(effectors(i), 'mode') && effectors(i).mode == "MOBILE"
-                    color = 'b'; % Mobile units are blue
+                    color = 'b';
                 end
                 
                 [th, phi] = meshgrid(linspace(0, 2*pi, 30), linspace(0, pi/2, 15));
@@ -164,6 +176,7 @@ classdef map < handle
         function updateUASAnimation(obj, UASPos_all)
             for i = 1:length(obj.UASTrail)
                 if i <= length(UASPos_all)
+                    if ~isvalid(obj.UASTrail(i)); continue; end
                     pos = UASPos_all{i}; 
                     if ~isempty(pos)
                         set(obj.UASTrail(i), 'XData', pos(:, 1), 'YData', pos(:, 2), 'ZData', pos(:, 3));
@@ -196,6 +209,14 @@ classdef map < handle
 
         function wipeAnimation(obj)
             clf; obj.timeBox = [];
+            obj.UASTrail = gobjects(0);
+            obj.UASHead = gobjects(0);
+            obj.UASsensed = gobjects(0);
+            obj.UASkilled = gobjects(0);
+            obj.UAScrashed = gobjects(0);
+            obj.assetDestroyed = gobjects(0);
+            obj.effectorDomes = gobjects(0);
+            obj.effectorDots = gobjects(0);
         end
     end
 end

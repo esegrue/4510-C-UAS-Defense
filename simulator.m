@@ -39,7 +39,7 @@ classdef simulator < handle
             obj.animationMultiplier = options.animationMultiplier; obj.hideClock = options.hideClock; obj.fadePings = options.fadePings; 
             obj.costConfig = options.costConfig;
 
-            % defining NFZs based on elevation
+            % Build occupancy map from terrain elevation
             mapL = obj.map.size.vert;
             mapW = obj.map.size.horiz;
             costmap = zeros(mapW+1, mapL+1);
@@ -51,6 +51,22 @@ classdef simulator < handle
             for x = 0:1:mapW
                 for y = 0:1:mapL
                     costmap(x+1,y+1) = obj.map.getElevation(x,y) > flightAlt;
+                end
+            end
+
+            % Burn NFZ polyshapes into costmap so HybridAStar routes around them
+            if ~isempty(obj.NFZs)
+                for x = 0:1:mapW
+                    for y = 0:1:mapL
+                        if costmap(x+1, y+1) == 0
+                            for n = 1:length(obj.NFZs)
+                                if isinterior(obj.NFZs(n), x, y)
+                                    costmap(x+1, y+1) = 1;
+                                    break;
+                                end
+                            end
+                        end
+                    end
                 end
             end
             
@@ -116,7 +132,7 @@ classdef simulator < handle
             animate_on = obj.animate;
             if animate_on
                 if obj.resetGraphics; obj.map.wipeAnimation(); end
-                obj.map.startAnimation(obj.asset, obj.effectors, obj.sensors, numUAS, obj.hideClock);
+                obj.map.startAnimation(obj.asset, obj.effectors, obj.sensors, numUAS, obj.hideClock, obj.NFZs);
                 UASsensedPos = [];
                 view(0,90)
             end
@@ -229,7 +245,6 @@ classdef simulator < handle
                     eventExit = tick_count > 10 && ((pos(1) <= 0) || (pos(1) >= obj.map.size.horiz) || (pos(2) <= 0) || (pos(2) >= obj.map.size.vert));
                     
                     if eventEffector
-                        % Time-invariant cost calculation
                         cost = cost + cost_eff*1/d_asset*currentTime; 
                         outcomeLog(end+1) = "Intercept";
                         UASkillLocations = [UASkillLocations; pos];
@@ -351,7 +366,6 @@ classdef simulator < handle
                     end
                 end
 
-                % Fallback vector movement if A* fails
                 if ~moved
                     goal = interceptPose(1:2);
                     v = goal - eff.location;
