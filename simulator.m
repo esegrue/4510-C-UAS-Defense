@@ -188,6 +188,27 @@ classdef simulator < handle
                     if hasSensors && isScanTick
                         d_sens = sqrt((sensorLocs(:,1) - pos(1)).^2 + (sensorLocs(:,2) - pos(2)).^2);
                         raw_probs = 1 ./ (1 + exp((d_sens - sensorD50') ./ sensorK'));
+
+                        % NFZ line-of-sight blocking
+                        nSens = size(sensorLocs, 1);
+                        for s = 1:nSens
+                            if raw_probs(s) <= 0; continue; end
+                            if simulator.losBlockedByNFZ(sensorLocs(s,:), pos(1:2), obj.NFZs)
+                                raw_probs(s) = 0;
+                            end
+                        end
+
+                        % Uphill terrain penalty
+                        for s = 1:nSens
+                            if raw_probs(s) <= 0; continue; end
+                            sElev = terrainProxy(sensorLocs(s,2), sensorLocs(s,1));
+                            maxElev = simulator.maxTerrainOnPath(sensorLocs(s,:), pos(1:2), terrainProxy);
+                            if maxElev > sElev
+                                penalty = max(0, 1 - (maxElev - sElev) / d_sens(s));
+                                raw_probs(s) = raw_probs(s) * penalty;
+                            end
+                        end
+
                         probs = min(raw_probs, 0.90);
                         if any(probs >= rand(size(probs))); isPinged = true; end
                         track_hist(i, :) = [track_hist(i, 2:end), isPinged];

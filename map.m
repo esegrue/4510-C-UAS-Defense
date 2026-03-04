@@ -60,23 +60,49 @@ classdef map < handle
             end
         end
 
-        function displayMap(obj, sensors)
+                function displayMap(obj, sensors, nfzs)
+            if nargin < 3; nfzs = polyshape.empty; end
             hold on
             if ~isempty(obj.terrain)
                 surf(obj.terrain.X, obj.terrain.Y, obj.terrain.Z, ...
                     'EdgeColor', 'none', 'FaceAlpha', 0.6, 'DisplayName', 'Terrain');
             end
 
-            % Draw sensor detection probability contours instead of terrain contours
+            % Draw sensor detection probability contours with NFZ blocking
             if nargin >= 2 && ~isempty(sensors)
                 X = obj.terrain.X; Y = obj.terrain.Y;
                 P = zeros(size(X));
                 d50 = sensors(1).params.d50;
                 k  = sensors(1).params.k;
+                nSteps = 10; % LOS sample points
                 for s = 1:length(sensors)
                     loc = sensors(s).location;
                     D = sqrt((X - loc(1)).^2 + (Y - loc(2)).^2);
-                    P = max(P, 1 ./ (1 + exp((D - d50) ./ k)));
+                    sProb = 1 ./ (1 + exp((D - d50) ./ k));
+
+                    % Zero out probability where NFZ blocks line-of-sight
+                    if ~isempty(nfzs)
+                        for r = 1:size(X,1)
+                            for c = 1:size(X,2)
+                                blocked = false;
+                                targetXY = [X(r,c), Y(r,c)];
+                                for t = linspace(0, 1, nSteps)
+                                    pt = loc + t * (targetXY - loc);
+                                    for n = 1:length(nfzs)
+                                        if isinterior(nfzs(n), pt(1), pt(2))
+                                            blocked = true; break;
+                                        end
+                                    end
+                                    if blocked; break; end
+                                end
+                                if blocked
+                                    sProb(r,c) = 0;
+                                end
+                            end
+                        end
+                    end
+
+                    P = max(P, sProb);
                 end
                 contour(X, Y, min(P, 0.90), [0.1 0.25 0.5 0.75 0.9], ...
                     'LineWidth', 1.5, 'ShowText', 'on');
@@ -98,7 +124,7 @@ classdef map < handle
                 figure('Name', 'Simulation Animation', 'Position', [100 100 600 400]);
             end
 
-            obj.displayMap(sensors)
+            obj.displayMap(sensors, nfzs)
             obj.UASTrail = gobjects(1, numUAS);
             obj.UASHead = gobjects(1, numUAS);
             z_offset = 1; 
