@@ -42,7 +42,7 @@ classdef simulator < handle
             % Build occupancy map from terrain elevation
             mapL = obj.map.size.vert;
             mapW = obj.map.size.horiz;
-            costmap = zeros(mapW+1, mapL+1);
+            costmap = zeros(mapL+1, mapW+1);  % rows=y, cols=x
             if ~isempty(obj.UAS) && isprop(obj.UAS(1), 'altitude')
                 flightAlt = obj.UAS(1).altitude;
             else
@@ -50,18 +50,18 @@ classdef simulator < handle
             end
             for x = 0:1:mapW
                 for y = 0:1:mapL
-                    costmap(x+1,y+1) = obj.map.getElevation(x,y) > flightAlt;
+                    costmap(y+1, x+1) = obj.map.getElevation(x,y) > flightAlt;
                 end
             end
 
-            % Burn NFZ polyshapes into costmap so HybridAStar routes around them
+            % Burn NFZ polyshapes into costmap
             if ~isempty(obj.NFZs)
                 for x = 0:1:mapW
                     for y = 0:1:mapL
-                        if costmap(x+1, y+1) == 0
+                        if costmap(y+1, x+1) == 0
                             for n = 1:length(obj.NFZs)
                                 if isinterior(obj.NFZs(n), x, y)
-                                    costmap(x+1, y+1) = 1;
+                                    costmap(y+1, x+1) = 1;
                                     break;
                                 end
                             end
@@ -69,8 +69,8 @@ classdef simulator < handle
                     end
                 end
             end
-            
-            obj.occMap = binaryOccupancyMap(fliplr(costmap));
+
+            obj.occMap = binaryOccupancyMap(flipud(costmap));
 
             % Initialize history for N UAS
             obj.UASPos_all = cell(1, length(obj.UAS));
@@ -138,7 +138,7 @@ classdef simulator < handle
             end
             
             simComplete = false; tick_count = 0;
-            max_expected_ticks = 10000;
+            max_expected_ticks = 400;
             if animate_on
                 for i = 1:numUAS
                     obj.UASPos_all{i} = [obj.UASPos_all{i}; NaN(max_expected_ticks, 3)];

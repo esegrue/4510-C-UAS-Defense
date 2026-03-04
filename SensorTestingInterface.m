@@ -8,8 +8,8 @@ mapConfig.W = 100;
 mapConfig.terrainType = 'Hills';
 mapConfig.terrainMag = 5;
 
-% Asset
-assetConfig.location = [30, 60];
+% Asset — centered on map
+assetConfig.location = [50, 50];
 
 % Sensors
 sensConfig.count = 3;
@@ -21,12 +21,12 @@ sensConfig.params = struct( ...
 % Adversaries
 advConfig.count = 25;
 advConfig.speed = 15;
-advConfig.turnRadius = 3;
+advConfig.turnRadius = 5;
 advConfig.altitude = 10;
 advConfig.planner = 'HybridAStar';
 
 % Monte Carlo
-mcSettings.maxConfigs = 5;
+mcSettings.maxConfigs = 1000;
 mcSettings.testsPerConfig = 1;
 
 % Simulation engine
@@ -57,15 +57,15 @@ xlims = [0 mapConfig.L]; ylims = [0 mapConfig.W];
 mapBounds = [xlims, ylims];
 asset = struct('location', assetConfig.location);
 
-% No-Fly Zones (fixed polygons)
+% No-Fly Zones — centered around asset at [50, 50]
 nfzArray = [ ...
-    polyshape([5 15 15 5],     [50 50 65 65]);       % left of asset
-    polyshape([40 52 52 40],   [55 55 68 68]);       % right of asset
-    polyshape([20 30 33 25 18],[75 73 82 88 84]);     % above asset
-    polyshape([22 34 34 22],   [38 38 50 50]);       % below asset
-    polyshape([70 82 85 73],   [5 5 17 17]);         % bottom-right
-    polyshape([65 78 75 62],   [70 68 82 82]);       % top-right
-    polyshape([80 95 93 80],   [35 35 50 50]);       % right-side
+    polyshape([25 35 35 25],   [40 40 55 55]);       % left of asset
+    polyshape([60 72 72 60],   [45 45 58 58]);       % right of asset
+    polyshape([40 50 53 45 38],[65 63 72 78 74]);     % above asset
+    polyshape([42 54 54 42],   [28 28 40 40]);       % below asset
+    polyshape([75 87 90 78],   [10 10 22 22]);       % bottom-right corner
+    polyshape([70 83 80 67],   [75 73 87 87]);       % top-right corner
+    polyshape([5  20 18  5],   [70 70 85 85]);       % top-left corner
 ];
 
 trialSeeds = randi([1, 2^31-1], mcSettings.maxConfigs, mcSettings.testsPerConfig);

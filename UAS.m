@@ -148,15 +148,22 @@ classdef UAS < handle
         end
 
         function avoidNFZ(obj)
-            % detects but does not yet turn
-            if isinterior(obj.obstacles.NFZs, obj.position + obj.targetUnitVector*obj.range)
-                angle = linspace(-pi/4, pi/4, 100);
-                options = zeros(100, 2);
-                for n = 1:length(angle)
-                    check = obj.position' + [cos(-angle(n)) -sin(-angle(n)); sin(-angle(n)) cos(-angle(n))]*obj.targetUnitVector'*obj.range;
-                    options(n, :) = check';
+            % Check if the look-ahead point is inside an NFZ
+            lookAhead = obj.position(1:2) + obj.targetUnitVector(1:2)*obj.range;
+            if ~isinterior(obj.obstacles.NFZs, lookAhead)
+                return;  % path is clear, nothing to do
+            end
+
+            % Sweep candidate angles and pick the smallest deflection that is clear
+            angles = linspace(-pi/2, pi/2, 180);
+            for n = 1:length(angles)
+                R = [cos(angles(n)) -sin(angles(n)); sin(angles(n)) cos(angles(n))];
+                candidate = obj.position(1:2)' + R * obj.targetUnitVector(1:2)' * obj.range;
+                if ~isinterior(obj.obstacles.NFZs, candidate')
+                    newDir = R * obj.targetUnitVector(1:2)';
+                    obj.targetUnitVector = [newDir', 0];
+                    return;
                 end
-                crash = find(isinterior(obj.obstacles.NFZs, options) == true);
             end
         end
     end
