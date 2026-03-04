@@ -26,7 +26,7 @@ advConfig.altitude = 10;
 advConfig.planner = 'HybridAStar';
 
 % Monte Carlo
-mcSettings.maxConfigs = 1000;
+mcSettings.maxConfigs = 10;
 mcSettings.testsPerConfig = 1;
 
 % Simulation engine

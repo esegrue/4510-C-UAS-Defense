@@ -60,13 +60,31 @@ classdef map < handle
             end
         end
 
-        function displayMap(obj) 
+        function displayMap(obj, sensors)
             hold on
             if ~isempty(obj.terrain)
                 surf(obj.terrain.X, obj.terrain.Y, obj.terrain.Z, ...
                     'EdgeColor', 'none', 'FaceAlpha', 0.6, 'DisplayName', 'Terrain');
+            end
+
+            % Draw sensor detection probability contours instead of terrain contours
+            if nargin >= 2 && ~isempty(sensors)
+                X = obj.terrain.X; Y = obj.terrain.Y;
+                P = zeros(size(X));
+                d50 = sensors(1).params.d50;
+                k  = sensors(1).params.k;
+                for s = 1:length(sensors)
+                    loc = sensors(s).location;
+                    D = sqrt((X - loc(1)).^2 + (Y - loc(2)).^2);
+                    P = max(P, 1 ./ (1 + exp((D - d50) ./ k)));
+                end
+                contour(X, Y, min(P, 0.90), [0.1 0.25 0.5 0.75 0.9], ...
+                    'LineWidth', 1.5, 'ShowText', 'on');
+                colormap(jet); colorbar;
+            else
                 colormap(summer); colorbar;
             end
+
             xlim([0,obj.size.horiz]); ylim([0,obj.size.vert]);
             grid on; axis equal; view(45, 30);
             title("UAS Simulation (3D Terrain & Coverage)");
@@ -80,7 +98,7 @@ classdef map < handle
                 figure('Name', 'Simulation Animation', 'Position', [100 100 600 400]);
             end
 
-            obj.displayMap
+            obj.displayMap(sensors)
             obj.UASTrail = gobjects(1, numUAS);
             obj.UASHead = gobjects(1, numUAS);
             z_offset = 1; 

@@ -298,6 +298,7 @@ classdef simulator < handle
     end
 
     methods (Access = private)
+
         function stepEffectors_(obj, targetPosXY, targetObj)
             xMin = obj.occMap.XWorldLimits(1);
             xMax = obj.occMap.XWorldLimits(2);
@@ -394,6 +395,35 @@ classdef simulator < handle
             ip = targetPosXY + vhat * spd * lookahead;
             hdg = atan2(vhat(2), vhat(1));
             interceptPose = [ip, hdg];
+        end
+    end
+
+    methods (Static, Access = private)
+        function blocked = losBlockedByNFZ(sensorXY, targetXY, nfzArray)
+            % Check if the line segment from sensor to target intersects any NFZ
+            blocked = false;
+            if isempty(nfzArray); return; end
+            nSteps = 20;
+            for t = linspace(0, 1, nSteps)
+                pt = sensorXY + t * (targetXY - sensorXY);
+                for n = 1:length(nfzArray)
+                    if isinterior(nfzArray(n), pt(1), pt(2))
+                        blocked = true;
+                        return;
+                    end
+                end
+            end
+        end
+
+        function maxZ = maxTerrainOnPath(sensorXY, targetXY, terrainProxy)
+            % Sample terrain elevation along the line from sensor to target
+            nSteps = 10;
+            maxZ = -inf;
+            for t = linspace(0, 1, nSteps)
+                pt = sensorXY + t * (targetXY - sensorXY);
+                z = terrainProxy(pt(2), pt(1));
+                if z > maxZ; maxZ = z; end
+            end
         end
     end
 end
