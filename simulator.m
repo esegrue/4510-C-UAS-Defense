@@ -132,6 +132,11 @@ classdef simulator < handle
             while ~simComplete
                 simComplete = true; 
                 tick_count = tick_count + 1;
+
+                if tick_count > max_expected_ticks
+                    break;
+                end
+
                 obj.tick = tick_count;
                 currentTime = tick_count * dt_local;
                 
