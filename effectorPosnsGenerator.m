@@ -1,54 +1,88 @@
-function effectorPosnsGenerator(xlim, ylim, filename, reset)
-    % Randomly generates positions of all deployed effectors within the
-    % deployable area
+function effectorPosnsGenerator(xlim, ylim, filename, reset, N)
 
-    % Inputs -
-    % xlim: [a,b] width of deployable area
-    % ylim: [c,d] height of deployable area
-    % filename: .mat file to save to
+    % Randomly generates positions of deployed effectors within the deployable area
+    %
+    % Inputs
+    % xlim: [xmin xmax]
+    % ylim: [ymin ymax]
+    % filename: MAT file to save bank
+    % reset: overwrite existing bank if true
+    % N: number of new positions to generate
 
-    % Outputs -
-    % filename: updated position bank
-    
     arguments
         xlim (1,2) double
         ylim (1,2) double
         filename char
         reset logical = false
+        N (1,1) double {mustBeInteger,mustBePositive} = 10000
     end
-    
-    x0 = xlim(1);
-    y0 = ylim(1);
-    xdiff = xlim(2) - x0;
-    ydiff = ylim(2) - y0;
-    posns = [0,0];
-    
-    i = 1;
-    hWaitbar = waitbar(0, 'New positions: 1', 'Name', 'Generating effector positions','CreateCancelBtn','delete(gcbf)');
-    while true
-        dx = rand()*xdiff;
-        dy = rand()*ydiff;
-        posns(end+1,:) = [x0 + dx, y0 + dy];
+
+    xmin = xlim(1);
+    ymin = ylim(1);
+
+    xspan = xlim(2) - xmin;
+    yspan = ylim(2) - ymin;
+
+    posns = zeros(N,2);
+
+    hWaitbar = waitbar(0,...
+        sprintf('New positions: 0 / %d',N),...
+        'Name','Generating effector positions',...
+        'CreateCancelBtn','delete(gcbf)');
+
+    updateEvery = max(1, round(N/200));
+
+    for i = 1:N
+
+        posns(i,:) = [ xmin + rand()*xspan , ymin + rand()*yspan ];
+
         if ~ishandle(hWaitbar)
-            disp('Generation stopped by user.')
+
+            disp("Generation stopped by user");
+
+            posns = posns(1:i-1,:);
+
             break
-        else
-            waitbar(i/(i+1000),hWaitbar, ['New positions: ' num2str(i)]);
-            i = i + 1;
+
         end
-        pause(0.01)
+
+        if mod(i,updateEvery) == 0 || i == N
+
+            waitbar(i/N,hWaitbar,...
+                sprintf('New positions: %d / %d',i,N));
+
+            drawnow limitrate
+
+        end
+
+    end
+
+    if ishandle(hWaitbar)
+        close(hWaitbar)
     end
 
     if isfile(filename)
+
         data = load(filename);
-        if isfield(data, 'effector_posns_bank') && (reset == false)
-            effector_posns_bank = data.('effector_posns_bank');
-            effector_posns_bank = [effector_posns_bank; posns]; 
+
+        if isfield(data,"effector_posns_bank") && ~reset
+
+            effector_posns_bank = data.effector_posns_bank;
+
+            effector_posns_bank = [effector_posns_bank ; posns];
+
         else
+
             effector_posns_bank = posns;
-        end           
+
+        end
+
     else
+
         effector_posns_bank = posns;
+
     end
-    save(filename, 'effector_posns_bank');
+
+    save(filename,"effector_posns_bank");
+
 end
