@@ -153,7 +153,7 @@ classdef map < handle
 
         function displayMap2D(obj, ax)
             if nargin >= 2 && ~isempty(ax) && isgraphics(ax, 'axes')
-                axes(ax); %#ok<LAXES>
+                axes(ax); 
             end
 
             hold on
@@ -214,7 +214,7 @@ classdef map < handle
                     if obj.resolution ~= 1
                         xq = 0:1:obj.size.horiz;
                         yq = 0:1:obj.size.vert;
-                        [Xq, Yq] = meshgrid(xq, yq); %#ok<ASGLU>
+                        [Xq, Yq] = meshgrid(xq, yq); 
                         Z = obj.getElevation(Xq, Yq);
                         imagesc(obj.axTerr, xq, yq, Z);
                     else
@@ -242,7 +242,7 @@ classdef map < handle
                     ylabel(obj.axTerr, 'Y (m)');
                 end
 
-                axes(obj.axSim); %#ok<LAXES>
+                axes(obj.axSim); 
             else
                 if isempty(obj.figSim) || ~isgraphics(obj.figSim)
                     obj.figSim = figure('Name', 'UAS Simulation', 'NumberTitle', 'off');
@@ -544,7 +544,7 @@ classdef map < handle
                     if isempty(hist)
                         hist = loc;
                     else
-                        hist = [hist; loc]; %#ok<AGROW>
+                        hist = [hist; loc]; 
                     end
 
                     if size(hist, 1) > obj.defenderMaxTrailPoints
@@ -705,10 +705,10 @@ classdef map < handle
             for i = 1:length(destroyedAssets)
                 x = assets(destroyedAssets(i)).location(1);
                 y = assets(destroyedAssets(i)).location(2);
-                XData(end + 1) = x; %#ok<AGROW>
-                YData(end + 1) = y; %#ok<AGROW>
+                XData(end + 1) = x; 
+                YData(end + 1) = y; 
                 if obj.is3DView
-                    ZData(end + 1) = obj.getElevation(x, y) + map.assetHeight_(); %#ok<AGROW>
+                    ZData(end + 1) = obj.getElevation(x, y) + map.assetHeight_(); 
                 end
             end
 
@@ -839,8 +839,8 @@ classdef map < handle
 
             expireTime = tic;
             for k = 1:numel(newHandles)
-                obj.killFlashHandles(end + 1, 1) = newHandles(k); %#ok<AGROW>
-                obj.killFlashExpireTimes(end + 1, 1) = toc(expireTime) + obj.killFlashDuration; %#ok<AGROW>
+                obj.killFlashHandles(end + 1, 1) = newHandles(k); 
+                obj.killFlashExpireTimes(end + 1, 1) = toc(expireTime) + obj.killFlashDuration;
             end
         end
 
