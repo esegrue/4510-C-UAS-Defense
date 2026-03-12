@@ -14,6 +14,7 @@ classdef UAS < handle
         altitude
         turnRadius
 
+        adversary_path
         pathPoints
         pathHeadings
         tickOffset
@@ -22,7 +23,12 @@ classdef UAS < handle
     end
 
     methods
-        function obj = UAS(speed, entrance, target, mode, altitude, turnRadius)
+        function obj = UAS(speed, entrance, target, mode, altitude, turnRadius, options)
+            arguments
+                speed, entrance, target, mode, altitude, turnRadius
+                options.adversary_path = [];
+
+            end
             obj.speed = speed;
             obj.altitude = altitude;
             obj.turnRadius = turnRadius;
@@ -34,11 +40,16 @@ classdef UAS < handle
             obj.targetUnitVector = [dir2D/norm(dir2D), 0]; % Z-component is 0
             obj.active = true; % Default to active
 
-
+            obj.adversary_path = options.adversary_path; %please note that this will have both ingress and egress
             obj.pathPoints = [];
             obj.tickOffset = 0;
             obj.planner = [];
             obj.heading = atan2(obj.targetUnitVector(2), obj.targetUnitVector(1));
+
+            if ~isempty(obj.adversary_path)
+                obj.pathPoints = obj.adversary_path(:,1:2);
+                obj.pathHeadings = obj.adversary_path(:,3);
+            end
         end
 
         function linearMotion(obj, time)
@@ -48,7 +59,7 @@ classdef UAS < handle
         end
         function hybridAStarMotion(obj, time, tick, turnRadius, costMap)
             if obj.active
-                if isempty(obj.planner)
+                if isempty(obj.planner) & isempty(obj.adversary_path) %i.e. we haven't passed a pre-planned path in
                     ss = stateSpaceSE2;
                     ss.StateBounds = [costMap.XWorldLimits; costMap.YWorldLimits; -pi pi];
                     sv = validatorOccupancyMap(ss);
@@ -60,6 +71,7 @@ classdef UAS < handle
                     obj.pathPoints = refPath.States(:, 1:2);  % Just x,y coordinates
                     obj.pathHeadings = refPath.States(:,3);
                     pts = refPath.States; % [x y theta]
+                    fprintf("WARNING: Generating paths in-loop. Consider pre-generating for speed.")
                 end
     
                 if tick-obj.tickOffset~=0
@@ -69,7 +81,7 @@ classdef UAS < handle
                         obj.heading = obj.pathHeadings(tick - obj.tickOffset);
                         
       
-                    else %reached end of path, now escape
+                    elseif isempty(obj.adversary_path) %reached end of path, now escape (only need to generate if no pre-gen path)
                         positionxy = [obj.position(1), obj.position(2)];
                         posEsc = [costMap.XWorldLimits(1), obj.position(2); obj.position(1), costMap.YWorldLimits(1); costMap.XWorldLimits(2), obj.position(2); obj.position(1), costMap.YWorldLimits(2)];
                         [~, Iesc] = min(sum((posEsc - positionxy).^2, 2));

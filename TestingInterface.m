@@ -14,8 +14,9 @@ mcSettings.reliabilityThresh = 90; % minimum reliability (%) to be valid
 % MAP SETTINGS
 mapConfig.L = 100; % map Length (units)
 mapConfig.W = 100; % map Width (units)
-mapConfig.terrainType = 'Hills'; % terrain generation type ('Flat')
-mapConfig.terrainMag = 5; % terrain height magnitude
+%mapConfig.terrainType = 'Hills'; % terrain generation type ('Flat')
+%mapConfig.terrainMag = 5; % terrain height magnitude
+mapConfig.pathBankFile = "adversary_paths_bank.mat";
 
 % ASSET LOCATION
 assetConfig.location = [30, 60]; % [X, Y] location of the asset
@@ -57,9 +58,11 @@ simConfig.animateLive = false; % animate? (slows down processing)
 rng('shuffle')
 
 % define map
-mapBounds = [0 mapConfig.L 0 mapConfig.W];
-mapObj = map(mapConfig.L, mapConfig.W, 1); 
-mapObj.generateTerrain(mapConfig.terrainType, mapConfig.terrainMag); 
+%mapBounds = [0 mapConfig.L 0 mapConfig.W];
+%mapObj = map(mapConfig.L, mapConfig.W, 1); 
+%mapObj.generateTerrain(mapConfig.terrainType, mapConfig.terrainMag); 
+load big_island_map.mat
+mapObj = elevationMap;
 xlims = [0 mapConfig.L]; ylims = [0 mapConfig.W];
 
 % storage arrays
@@ -81,6 +84,11 @@ if isfile(effConfig.posBankFile)
     load(effConfig.posBankFile, 'effector_posns_bank');
 else
     error('Effector position bank file not found: %s', effConfig.posBankFile);
+end
+if isfile(mapConfig.pathBankFile)
+    load(mapConfig.pathBankFile, 'adversary_paths_bank');
+else
+    error('Adversary path bank file not found: %s', mapConfig.pathBankFile);
 end
 
 % define asset
@@ -147,7 +155,8 @@ while numConfigs < mcSettings.maxConfigs
                 while mapObj.getElevation(starts(k,1), starts(k,2)) >= advConfig.altitude
                     starts(k,:) = ingressPosns(xlims, ylims, 1);
                 end
-                uasArray(k) = UAS(advConfig.speed, starts(k,:), asset.location, advConfig.planner, advConfig.altitude, advConfig.turnRadius);
+                path = adversary_paths_bank{1,1,randi(length(adversary_paths_bank))};
+                uasArray(k) = UAS(advConfig.speed, starts(k,:), asset.location, advConfig.planner, advConfig.altitude, advConfig.turnRadius, "adversary_path", path);
             end
             sim = simulator(mapObj, uasArray, currentEffectors, sensors, asset, 'tps', simConfig.tps, 'animate', false, 'nfzs', polyshape.empty, 'resetGraphics', false, 'costConfig', costConfig);
             runResults = sim.runSim();
@@ -174,7 +183,8 @@ while numConfigs < mcSettings.maxConfigs
                 while mapObj.getElevation(starts(k,1), starts(k,2)) >= advConfig.altitude
                     starts(k,:) = ingressPosns(xlims, ylims, 1);
                 end
-                uasArray(k) = UAS(advConfig.speed, starts(k,:), asset.location, advConfig.planner, advConfig.altitude, advConfig.turnRadius);
+                path = adversary_paths_bank{1,1,randi(length(adversary_paths_bank))};
+                uasArray(k) = UAS(advConfig.speed, starts(k,:), asset.location, advConfig.planner, advConfig.altitude, advConfig.turnRadius, "adversary_path",path);
             end
             
             sim = simulator(mapObj, uasArray, currentEffectors, sensors, asset, 'tps', simConfig.tps, 'animate', simConfig.animateLive, 'nfzs', polyshape.empty, 'resetGraphics', true, 'costConfig', costConfig);

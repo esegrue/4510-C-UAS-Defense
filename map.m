@@ -49,14 +49,14 @@ classdef map < handle
                     end
             end
             obj.terrain.X = X; obj.terrain.Y = Y; obj.terrain.Z = Z;
-            obj.terrainProxy = griddedInterpolant({y_vec, x_vec}, Z, 'linear', 'nearest');
+            obj.terrainProxy = griddedInterpolant({y_vec, x_vec}, Z', 'linear', 'nearest');
         end
 
         function z = getElevation(obj, x, y)
             if isempty(obj.terrainProxy)
                 z = zeros(size(x));
             else
-                z = obj.terrainProxy(y, x);
+                z = obj.terrainProxy(x,y);
             end
         end
 
@@ -166,7 +166,7 @@ classdef map < handle
                 if i <= length(UASPos_all)
                     pos = UASPos_all{i}; 
                     if ~isempty(pos)
-                        set(obj.UASTrail(i), 'XData', pos(:, 1), 'YData', pos(:, 2), 'ZData', pos(:, 3));
+                        set(obj.UASTrail(i), 'XData', pos(1:end-1, 1), 'YData', pos(1:end-1, 2), 'ZData', pos(1:end-1, 3));
                         set(obj.UASHead(i), 'XData', pos(end, 1), 'YData', pos(end, 2), 'ZData', pos(end, 3));
                     end
                 end

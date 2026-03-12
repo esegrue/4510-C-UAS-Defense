@@ -1,4 +1,4 @@
-function filename = adversaryPathsGenerator(dT, speed, turnRadius, elevationMap, targetPos, filename, reset)
+function filename = adversaryPathsGenerator(dT, speed, turnRadius, elevationMap, targetPos, adv_height, filename, reset)
     %UNTITLED Summary of this function goes here
     %   Detailed explanation goes here
 
@@ -8,26 +8,31 @@ function filename = adversaryPathsGenerator(dT, speed, turnRadius, elevationMap,
         turnRadius double
         elevationMap map
         targetPos (1,2) double
+        adv_height double
         filename char
         reset logical = false
     end
-    
+    global elmap;
+    elmap = elevationMap;
     %defining NFZs based on elevation
     mapL = elevationMap.size.vert;
     mapW = elevationMap.size.horiz;
     costmap = zeros(mapL+1, mapW+1);
-    for x = 0:1:mapL
-        for y = 0:1:mapW
-            costmap(x+1,y+1) = elevationMap.getElevation(x,y) > 20; %arbitrary height
+    for x = 1:1:mapL
+        for y = 1:1:mapW
+            costmap(x,y) = elevationMap.terrain.Z(x,y) > (adv_height * 0.975); %arbitrary height
+            
         end
     end
     
-    occMap = binaryOccupancyMap(fliplr(costmap)); %map mirrors for some reason
+    occMap = binaryOccupancyMap(flipud(costmap));%(fliplr(costmap)); %map mirrors for some reason
     
     ss = stateSpaceSE2;
     ss.StateBounds = [occMap.XWorldLimits; occMap.YWorldLimits; -pi pi];
     sv = validatorOccupancyMap(ss);
     sv.Map = occMap;
+    figure(3)
+    show(occMap)
     planner = plannerHybridAStar(sv, 'MinTurningRadius', turnRadius, "InterpolationDistance",speed*dT);
     
     

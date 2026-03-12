@@ -49,13 +49,13 @@ classdef simulator < handle
             else
                 flightAlt = 25; 
             end
-            for x = 0:1:mapW
-                for y = 0:1:mapL
-                    costmap(x+1,y+1) = obj.map.getElevation(x,y) > flightAlt;
+            for x = 1:1:mapW
+                for y = 1:1:mapL
+                    costmap(x,y) = obj.map.getElevation(x,y) > flightAlt;
                 end
             end
             
-            obj.occMap = binaryOccupancyMap(fliplr(costmap));
+            obj.occMap = binaryOccupancyMap(flipud(costmap));
 
             % Initialize history for N UAS
             obj.UASPos_all = cell(1, length(obj.UAS));
@@ -190,7 +190,7 @@ classdef simulator < handle
                     % Update 3D array for collision checking
                     for k = 1:length(obj.effectors)
                         loc = obj.effectors(k).location;
-                        z = terrainProxy(loc(2), loc(1)); 
+                        z = terrainProxy(loc(1), loc(2)); 
                         obj.effectors3D(k, :) = [loc(1), loc(2), z];
                     end
                 end
@@ -214,7 +214,7 @@ classdef simulator < handle
                         if d_asset <= (uasObj.speed * dt_local); eventAsset = true; end
                     end
                     
-                    z_terr = terrainProxy(pos(2), pos(1)); 
+                    z_terr = terrainProxy(pos(1), pos(2)); 
                     eventCrash = (pos(3) <= z_terr);
                     eventExit = tick_count > 10 && ((pos(1) <= 0) || (pos(1) >= obj.map.size.horiz) || (pos(2) <= 0) || (pos(2) >= obj.map.size.vert));
                     
