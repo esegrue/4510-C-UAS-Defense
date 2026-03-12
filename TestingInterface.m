@@ -281,7 +281,7 @@ while numConfigs < maxConfigs
         runStarts{j} = starts;
 
         if isfield(runResults, 'UASkillLocations') && ~isempty(runResults.UASkillLocations)
-            currentConfigKills = [currentConfigKills; runResults.UASkillLocations]; %#ok<AGROW>
+            currentConfigKills = [currentConfigKills; runResults.UASkillLocations]; 
         end
 
         if runResults.cost >= costConfig.asset
