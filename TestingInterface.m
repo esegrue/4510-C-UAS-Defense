@@ -14,32 +14,40 @@ mcSettings.reliabilityThresh = 90; % minimum reliability (%) to be valid
 % MAP SETTINGS
 mapConfig.L = 100; % map Length (units)
 mapConfig.W = 100; % map Width (units)
-%mapConfig.terrainType = 'Hills'; % terrain generation type ('Flat')
-%mapConfig.terrainMag = 5; % terrain height magnitude
 mapConfig.pathBankFile = "adversary_paths_bank.mat";
 
 % ASSET LOCATION
 assetConfig.location = [30, 60]; % [X, Y] location of the asset
 
 % EFFECTOR SETTINGS
-effConfig.numStatic = 2; % number of static point-defense effectors
-effConfig.numMobile = 1; % number of mobile interceptor effectors
+effConfig.numStatic = 3; % number of static point-defense effectors
+effConfig.numMobile = 0; % number of mobile interceptor effectors
 effConfig.mobileSpeed = 12; % speed of mobile effectors (units/s)
-effConfig.range = 15; % interception radius (units)
+effConfig.range = 20; % interception radius (units)
 effConfig.posBankFile = "effector_posn_bank.mat";
 
+% WEAPON SETTINGS
+weaponConfig.mode = "KINETIC"; % "LEGACY", "DIRECT_ENERGY", or "KINETIC"
+weaponConfig.directEnergyDwellTime = 0.75;
+weaponConfig.kineticProjectileSpeed = 30;
+weaponConfig.kineticShotsPerVolley = 3;
+weaponConfig.kineticHitProbability = 1.0;
+weaponConfig.kineticRefireTime = 0.50;
+weaponConfig.projectileHitTolerance = 1.0;
+weaponConfig.kineticUseFermiModel = true; 
+
 % ADVERSARY SETTINGS
-advConfig.count = 4; % number of incoming threats
+advConfig.count = 3; % number of incoming threats
 advConfig.speed = 15; % UAS Speed (units/s)
-advConfig.turnRadius = 3; % UAS Turn Radius (units)
-advConfig.altitude = 10; % UAS Ingress Altitude (units)
+advConfig.turnRadius = 2; % UAS Turn Radius (units)
+advConfig.altitude = 15; % UAS Ingress Altitude (units)
 advConfig.planner = 'HybridAStar'; % path planning algorithm ('linear')
 
 % SENSOR SETTINGS
 sensConfig.count = 3; % number of sensors
 sensConfig.locations = [30,85; 8.35,47.5; 51.65,47.5]; % [X1,Y1; Xn,Yn] location of sensors
-sensConfig.range = 15; % detection radius (units)
-sensConfig.params = struct('d50', 25, 'k', 10, 'pings', 3, 'duration', 1.0, 'scanRate', 0.2);
+sensConfig.range = 20; % detection radius (units)
+sensConfig.params = struct('d50', sensConfig.range, 'k', 10, 'pings', 3, 'duration', 1.0, 'scanRate', 0.2);
 
 % COST FUNCTION SETTINGS
 costConfig.effector = 100; % cost per effector used
@@ -48,6 +56,7 @@ costConfig.leak = 250; % cost per adversary not intercepted
 
 % SIMULATION ENGINE SETTINGS
 simConfig.parallel = false; % run parallelized (no animation) or sequential loop
+simConfig.numCores = feature("numcores")/2;
 simConfig.tps = 20; % time steps per second
 simConfig.animateLive = false; % animate? (slows down processing)
 
@@ -58,17 +67,16 @@ simConfig.animateLive = false; % animate? (slows down processing)
 rng('shuffle')
 
 % define map
-%mapBounds = [0 mapConfig.L 0 mapConfig.W];
-%mapObj = map(mapConfig.L, mapConfig.W, 1); 
-%mapObj.generateTerrain(mapConfig.terrainType, mapConfig.terrainMag); 
 load big_island_map.mat
 mapObj = elevationMap;
+mapBounds = [0 mapConfig.L 0 mapConfig.W];
 xlims = [0 mapConfig.L]; ylims = [0 mapConfig.W];
 
 % storage arrays
 trialSeeds = randi([1, 2^31-1], mcSettings.maxConfigs, mcSettings.testsPerConfig);
 configStore = cell(mcSettings.maxConfigs, 1);      
-scenarioStore = cell(mcSettings.maxConfigs, 1);    
+scenarioStore = cell(mcSettings.maxConfigs, 1);
+pathStore = cell(mcSettings.maxConfigs, 1);
 costDetailsStore = cell(mcSettings.maxConfigs, 1); 
 killStore = cell(mcSettings.maxConfigs, 1);
 
@@ -140,29 +148,56 @@ while numConfigs < mcSettings.maxConfigs
     % 2. INITIALIZE STORAGE
     runCosts = zeros(mcSettings.testsPerConfig, 1); 
     runStarts = cell(mcSettings.testsPerConfig, 1);
+    runPaths = cell(mcSettings.testsPerConfig, 1);
     runFailures = zeros(mcSettings.testsPerConfig, 1);
     runKills = cell(mcSettings.testsPerConfig, 1);
     
     % 3. RUN TESTS
     if simConfig.parallel
+        parpool(simConfig.numCores)
         parfor j = 1:mcSettings.testsPerConfig
 
             rng(trialSeeds(numConfigs, j), 'twister');
 
-            starts = ingressPosns(xlims, ylims, advConfig.count);
             uasArray = UAS.empty(0, advConfig.count);
+            pathIdxs = zeros(advConfig.count, 1);
+            starts = zeros(advConfig.count, 3);
+            
             for k = 1:advConfig.count
-                while mapObj.getElevation(starts(k,1), starts(k,2)) >= advConfig.altitude
-                    starts(k,:) = ingressPosns(xlims, ylims, 1);
+                pIdx = randi(length(adversary_paths_bank));
+                pathIdxs(k) = pIdx;
+                path = adversary_paths_bank{1,1,pIdx};
+                
+                startX = path(1, 1);
+                startY = path(1, 2);
+                
+                startZ = advConfig.altitude;
+                groundElevation = mapObj.getElevation(startX, startY);
+                while groundElevation >= startZ
+                    startZ = startZ + 1;
                 end
-                path = adversary_paths_bank{1,1,randi(length(adversary_paths_bank))};
-                uasArray(k) = UAS(advConfig.speed, starts(k,:), asset.location, advConfig.planner, advConfig.altitude, advConfig.turnRadius, "adversary_path", path);
+                
+                starts(k, :) = [startX, startY, startZ];
+                
+                uasArray(k) = UAS(advConfig.speed, starts(k,:), asset.location, advConfig.planner, startZ, advConfig.turnRadius, "adversary_path", path);
             end
-            sim = simulator(mapObj, uasArray, currentEffectors, sensors, asset, 'tps', simConfig.tps, 'animate', false, 'nfzs', polyshape.empty, 'resetGraphics', false, 'costConfig', costConfig);
+            
+            rngState = rng;
+            sim = simulator(mapObj, uasArray, currentEffectors, sensors, asset, 'tps', simConfig.tps, 'animate', false, 'resetGraphics', false, 'costConfig', costConfig, ...
+                'weaponMode', weaponConfig.mode, ...
+                'directEnergyDwellTime', weaponConfig.directEnergyDwellTime, ...
+                'kineticProjectileSpeed', weaponConfig.kineticProjectileSpeed, ...
+                'kineticShotsPerVolley', weaponConfig.kineticShotsPerVolley, ...
+                'kineticHitProbability', weaponConfig.kineticHitProbability, ...
+                'kineticRefireTime', weaponConfig.kineticRefireTime, ...
+                'projectileHitTolerance', weaponConfig.projectileHitTolerance, ...
+                'kineticUseFermiModel', weaponConfig.kineticUseFermiModel);
             runResults = sim.runSim();
 
+            runRNGStates{j} = rngState;
             runCosts(j) = runResults.cost;
             runStarts{j} = starts;
+            runPaths{j} = pathIdxs;
 
             if isfield(runResults, 'UASkillLocations') && ~isempty(runResults.UASkillLocations)
                 runKills{j} = runResults.UASkillLocations;
@@ -177,21 +212,45 @@ while numConfigs < mcSettings.maxConfigs
 
             rng(trialSeeds(numConfigs, j), 'twister');
     
-            starts = ingressPosns(xlims, ylims, advConfig.count);
             uasArray = UAS.empty(0, advConfig.count);
-            for k = 1:advConfig.count
-                while mapObj.getElevation(starts(k,1), starts(k,2)) >= advConfig.altitude
-                    starts(k,:) = ingressPosns(xlims, ylims, 1);
-                end
-                path = adversary_paths_bank{1,1,randi(length(adversary_paths_bank))};
-                uasArray(k) = UAS(advConfig.speed, starts(k,:), asset.location, advConfig.planner, advConfig.altitude, advConfig.turnRadius, "adversary_path",path);
-            end
+            pathIdxs = zeros(advConfig.count, 1);
+            starts = zeros(advConfig.count, 3);
             
-            sim = simulator(mapObj, uasArray, currentEffectors, sensors, asset, 'tps', simConfig.tps, 'animate', simConfig.animateLive, 'nfzs', polyshape.empty, 'resetGraphics', true, 'costConfig', costConfig);
+            for k = 1:advConfig.count
+                pIdx = randi(length(adversary_paths_bank));
+                pathIdxs(k) = pIdx;
+                path = adversary_paths_bank{1,1,pIdx};
+                
+                startX = path(1, 1);
+                startY = path(1, 2);
+                
+                startZ = advConfig.altitude;
+                groundElevation = mapObj.getElevation(startX, startY);
+                while groundElevation >= startZ
+                    startZ = startZ + 1;
+                end
+                
+                starts(k, :) = [startX, startY, startZ];
+                
+                uasArray(k) = UAS(advConfig.speed, starts(k,:), asset.location, advConfig.planner, startZ, advConfig.turnRadius, "adversary_path", path);
+            end
+            rngState = rng;
+            
+            sim = simulator(mapObj, uasArray, currentEffectors, sensors, asset, 'tps', simConfig.tps, 'animate', simConfig.animateLive, 'resetGraphics', true, 'costConfig', costConfig, ...
+                'weaponMode', weaponConfig.mode, ...
+                'directEnergyDwellTime', weaponConfig.directEnergyDwellTime, ...
+                'kineticProjectileSpeed', weaponConfig.kineticProjectileSpeed, ...
+                'kineticShotsPerVolley', weaponConfig.kineticShotsPerVolley, ...
+                'kineticHitProbability', weaponConfig.kineticHitProbability, ...
+                'kineticRefireTime', weaponConfig.kineticRefireTime, ...
+                'projectileHitTolerance', weaponConfig.projectileHitTolerance, ...
+                'kineticUseFermiModel', weaponConfig.kineticUseFermiModel);
             runResults = sim.runSim();
             
+            runRNGStates{j} = rngState;
             runCosts(j) = runResults.cost; 
             runStarts{j} = starts;
+            runPaths{j} = pathIdxs;
             
             if isfield(runResults, 'UASkillLocations') && ~isempty(runResults.UASkillLocations)
                 runKills{j} = runResults.UASkillLocations;
@@ -208,6 +267,7 @@ while numConfigs < mcSettings.maxConfigs
     
     % 4. STORE CONFIGURATION RESULTS
     scenarioStore{numConfigs} = runStarts;
+    pathStore{numConfigs} = runPaths;
     costDetailsStore{numConfigs} = runCosts;
     CostperCombo(numConfigs) = mean(runCosts);
     killStore{numConfigs} = currentConfigKills;
@@ -281,7 +341,8 @@ SimResults.Metadata = struct(...
     'SensorParams', sensConfig.params, ...
     'EffectorRange', effConfig.range, ...
     'MCSettings', mcSettings, ... 
-    'advConfig', advConfig ...
+    'advConfig', advConfig, ...
+    'weaponConfig', weaponConfig ...
 );
 
 SimResults.MapData = mapObj; 
@@ -302,8 +363,9 @@ for i = 1:numConfigs
     % trial settings
     SimResults.Configs(i).Trials = struct();
     for t = 1:mcSettings.testsPerConfig
-        SimResults.Configs(i).Trials(t).Seed = trialSeeds(i, t);
+        SimResults.Configs(i).Trials(t).rngState = runRNGStates{t};
         SimResults.Configs(i).Trials(t).Starts = scenarioStore{i}{t};
+        SimResults.Configs(i).Trials(t).Paths = pathStore{i}{t};
         SimResults.Configs(i).Trials(t).Cost = costDetailsStore{i}(t);
     end
 end

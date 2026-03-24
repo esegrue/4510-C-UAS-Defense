@@ -36,6 +36,7 @@ end
 
 fprintf('Loading data from: %s\n', fileToLoad);
 load(fileToLoad, 'SimResults');
+load('adversary_paths_bank.mat', 'adversary_paths_bank');
 
 % unpacking variables
 mapObj = SimResults.MapData;
@@ -210,13 +211,32 @@ replayEffectors = SimResults.Configs(targetID).Effectors;
 trialsToReplay = SimResults.Configs(targetID).Trials;
 numReplays = length(trialsToReplay);
 
+% Extract Weapon Config
+if isfield(SimResults.Metadata, 'weaponConfig')
+    wC = SimResults.Metadata.weaponConfig;
+    wMode = wC.mode;
+    wDwell = wC.directEnergyDwellTime;
+    wKinSpd = wC.kineticProjectileSpeed;
+    wKinShots = wC.kineticShotsPerVolley;
+    wKinHitP = wC.kineticHitProbability;
+    wKinRefire = wC.kineticRefireTime;
+    wKinTol = wC.projectileHitTolerance;
+    wFermi = wC.kineticUseFermiModel;
+else
+    % Fallbacks if run from older data
+    wMode = "LEGACY";
+    wDwell = 0.75; wKinSpd = 30; wKinShots = 1; 
+    wKinHitP = 0.7; wKinRefire = 0.5; wKinTol = 0.75; wFermi = true;
+end
+
 for k = 1:numReplays
 
     % obtaining replay seed and inputs
-    replaySeed = trialsToReplay(k).Seed;
-    rng(replaySeed, 'twister');
+    rngState = trialsToReplay(k).rngState;
+    rng(rngState);
 
     replayStartPos = trialsToReplay(k).Starts;
+    replayPaths = trialsToReplay(k).Paths;
     numAdversaries = SimResults.Metadata.NumAdversaries;
     
     % redefine UAS
@@ -226,17 +246,31 @@ for k = 1:numReplays
         uSpeed = SimResults.Metadata.advConfig.speed;
         uTurn = SimResults.Metadata.advConfig.turnRadius;
         uPlan = SimResults.Metadata.advConfig.planner;
-        uAlt = SimResults.Metadata.advConfig.altitude;
+        uAlt_default = SimResults.Metadata.advConfig.altitude;
     else
         uSpeed = 15; uTurn = 25; uPlan = 'HybridAStar';
     end
     
     for u = 1:numAdversaries
-        uasArray(u) = UAS(uSpeed, replayStartPos(u,:), asset.location, uPlan, uAlt, uTurn);
+        if size(replayStartPos, 2) >= 3
+            uAlt = replayStartPos(u,3);
+        else
+            uAlt = uAlt_default;
+        end
+        path = adversary_paths_bank{1, 1, replayPaths(u)};
+        uasArray(u) = UAS(uSpeed, replayStartPos(u,:), asset.location, uPlan, uAlt, uTurn, "adversary_path", path);
     end
     
-    % redefine simulator
-    sim = simulator(mapObj, uasArray, replayEffectors, sensors, asset, 'tps', replayConfig.tps, 'animate', true, 'fadePings', true, 'nfzs', polyshape.empty, 'resetGraphics', true, 'animationMultiplier', replayConfig.animMult, 'costConfig', costConfig);
+    % redefine simulator (Removed the nfzs argument here!)
+    sim = simulator(mapObj, uasArray, replayEffectors, sensors, asset, 'tps', replayConfig.tps, 'animate', true, 'fadePings', true, 'resetGraphics', true, 'animationMultiplier', replayConfig.animMult, 'costConfig', costConfig, ...
+        'weaponMode', wMode, ...
+        'directEnergyDwellTime', wDwell, ...
+        'kineticProjectileSpeed', wKinSpd, ...
+        'kineticShotsPerVolley', wKinShots, ...
+        'kineticHitProbability', wKinHitP, ...
+        'kineticRefireTime', wKinRefire, ...
+        'projectileHitTolerance', wKinTol, ...
+        'kineticUseFermiModel', wFermi);
         
     sim.runSim();
     title(sprintf('Replay Config #%d | Run %d/%d | Cost: $%.2f', ...

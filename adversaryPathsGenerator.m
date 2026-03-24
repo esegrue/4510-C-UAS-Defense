@@ -12,29 +12,31 @@ function filename = adversaryPathsGenerator(dT, speed, turnRadius, elevationMap,
         filename char
         reset logical = false
     end
-    global elmap;
-    elmap = elevationMap;
-    %defining NFZs based on elevation
+    
+    % defining NFZs based on elevation
     mapL = elevationMap.size.vert;
     mapW = elevationMap.size.horiz;
     costmap = zeros(mapL+1, mapW+1);
-    for x = 1:1:mapL
-        for y = 1:1:mapW
-            costmap(x,y) = elevationMap.terrain.Z(x,y) > (adv_height * 0.975); %arbitrary height
-            
+    
+    % FIXED: Assigned (Y,X) standard and safe getElevation to match simulator.m
+    for y = 0:mapL
+        for x = 0:mapW
+            costmap(y+1,x+1) = elevationMap.getElevation(x,y) > (adv_height * 0.975); 
         end
     end
     
-    occMap = binaryOccupancyMap(flipud(costmap));%(fliplr(costmap)); %map mirrors for some reason
+    % FIXED: Used flipud to correctly align with 3D map
+    occMap = binaryOccupancyMap(flipud(costmap)); 
     
     ss = stateSpaceSE2;
     ss.StateBounds = [occMap.XWorldLimits; occMap.YWorldLimits; -pi pi];
     sv = validatorOccupancyMap(ss);
     sv.Map = occMap;
+    
     figure(3)
     show(occMap)
-    planner = plannerHybridAStar(sv, 'MinTurningRadius', turnRadius, "InterpolationDistance",speed*dT);
     
+    planner = plannerHybridAStar(sv, 'MinTurningRadius', turnRadius, "InterpolationDistance",speed*dT);
     
     entryBoundary = [occMap.XWorldLimits(1), occMap.XWorldLimits(1),occMap.YWorldLimits;
         occMap.XWorldLimits(2), occMap.XWorldLimits(2),occMap.YWorldLimits;
@@ -51,8 +53,8 @@ function filename = adversaryPathsGenerator(dT, speed, turnRadius, elevationMap,
         entryPos = [side(1) + rand()*(side(2) - side(1)), side(3) + rand()*(side(4) - side(3))];
         entryHeading = atan2(targetPos(2) - entryPos(2), targetPos(1) - entryPos(1)); %starts out naively pointed towards target
         exitSide = entryBoundary(randi(4),:);
-        exitPos = entryPos;%[exitSide(1) + rand()*(exitSide(2) - exitSide(1)), exitSide(3) + rand()*(exitSide(4) - exitSide(3))];
-        exitHeading = pi+entryHeading;%atan2(exitPos(2) - targetPos(2), exitPos(1) - targetPos(1));
+        exitPos = entryPos;
+        exitHeading = pi+entryHeading;
         
         inPath = plan(planner, [entryPos, entryHeading], [targetPos, entryHeading+pi/2]);
         inStates = inPath.States; % [x y theta]
@@ -60,7 +62,9 @@ function filename = adversaryPathsGenerator(dT, speed, turnRadius, elevationMap,
         outStates = outPath.States;
         totPath = cat(1, inStates, outStates(2:end,:));
 
-        paths = cat(3,paths, totPath);
+        % FIXED: Using proper cell array indexing to prevent concatenation errors
+        paths{1, 1, end+1} = totPath;
+        
         if ~ishandle(hWaitbar)
             disp('Generation stopped by user.')
             break
@@ -84,5 +88,3 @@ function filename = adversaryPathsGenerator(dT, speed, turnRadius, elevationMap,
     end
     save(filename, 'adversary_paths_bank');
 end
-
-

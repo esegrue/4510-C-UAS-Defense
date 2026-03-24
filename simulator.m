@@ -11,7 +11,6 @@ classdef simulator < handle
         dt
         tps
         animate
-        NFZs
         resetGraphics
         animationMultiplier
         hideClock
@@ -19,6 +18,26 @@ classdef simulator < handle
         costConfig
         effectors3D 
         occMap
+
+        % --- WEAPON & PHYSICS PROPERTIES ---
+        weaponMode
+        directEnergyDwellTime
+        kineticProjectileSpeed
+        kineticShotsPerVolley
+        kineticHitProbability
+        kineticRefireTime
+        projectileHitTolerance
+
+        kineticFermiD50Scale
+        kineticFermiSharpnessScale
+        kineticUseFermiModel
+
+        directEnergyTrackTime
+        effectorLastFireTime
+        projectiles
+        projectileHandles
+        projectileTrailHandles
+        pendingKineticHits
     end
 
     methods
@@ -27,31 +46,55 @@ classdef simulator < handle
                 map, uas, effectors, sensors, asset
                 options.tps = 20
                 options.animate = true
-                options.nfzs = polyshape.empty
                 options.resetGraphics = true
                 options.animationMultiplier = 1
                 options.hideClock = false
                 options.fadePings = false
                 options.costConfig = struct('effector', 100, 'asset', 2000, 'leak', 250)
+                
+                % Weapon Model Options
+                options.weaponMode (1, 1) string = "LEGACY"
+                options.directEnergyDwellTime (1, 1) double = 0.75
+                options.kineticProjectileSpeed (1, 1) double = 30
+                options.kineticShotsPerVolley (1, 1) double = 1
+                options.kineticHitProbability (1, 1) double = 0.70
+                options.kineticRefireTime (1, 1) double = 0.50
+                options.projectileHitTolerance (1, 1) double = 0.75
+                options.kineticFermiD50Scale (1, 1) double = 0.60
+                options.kineticFermiSharpnessScale (1, 1) double = 0.12
+                options.kineticUseFermiModel (1, 1) logical = true
             end
             obj.map = map; obj.UAS = uas; obj.effectors = effectors; obj.sensors = sensors; obj.asset = asset;
             obj.tick = 0; obj.tps = options.tps; obj.dt = 1 / obj.tps;
-            obj.animate = options.animate; obj.NFZs = options.nfzs; obj.resetGraphics = options.resetGraphics;
+            obj.animate = options.animate; obj.resetGraphics = options.resetGraphics;
             obj.animationMultiplier = options.animationMultiplier; obj.hideClock = options.hideClock; obj.fadePings = options.fadePings; 
             obj.costConfig = options.costConfig;
 
-            % defining NFZs based on elevation
+            % Apply Weapon Configs
+            obj.weaponMode = upper(string(options.weaponMode));
+            if obj.weaponMode == "KINECT"; obj.weaponMode = "KINETIC"; end
+            obj.directEnergyDwellTime = max(0, options.directEnergyDwellTime);
+            obj.kineticProjectileSpeed = max(eps, options.kineticProjectileSpeed);
+            obj.kineticShotsPerVolley = max(1, round(options.kineticShotsPerVolley));
+            obj.kineticHitProbability = min(1, max(0, options.kineticHitProbability));
+            obj.kineticRefireTime = max(0, options.kineticRefireTime);
+            obj.projectileHitTolerance = max(0.01, options.projectileHitTolerance);
+            obj.kineticFermiD50Scale = max(0.01, options.kineticFermiD50Scale);
+            obj.kineticFermiSharpnessScale = max(0.01, options.kineticFermiSharpnessScale);
+            obj.kineticUseFermiModel = options.kineticUseFermiModel;
+
+            % defining occupancy map based on elevation
             mapL = obj.map.size.vert;
             mapW = obj.map.size.horiz;
-            costmap = zeros(mapW+1, mapL+1);
+            costmap = zeros(mapL+1, mapW+1);
             if ~isempty(obj.UAS) && isprop(obj.UAS(1), 'altitude')
                 flightAlt = obj.UAS(1).altitude;
             else
                 flightAlt = 25; 
             end
-            for x = 1:1:mapW
-                for y = 1:1:mapL
-                    costmap(x,y) = obj.map.getElevation(x,y) > flightAlt;
+            for y = 0:mapL
+                for x = 0:mapW
+                    costmap(y+1,x+1) = obj.map.getElevation(x,y) >= flightAlt;
                 end
             end
             
@@ -69,9 +112,17 @@ classdef simulator < handle
                 for k = 1:numEff
                     loc = obj.effectors(k).location;
                     z = obj.map.getElevation(loc(1), loc(2));
-                    obj.effectors3D(k, :) = [loc(1), loc(2), z];
+                    obj.effectors3D(k, :) = [loc(1), loc(2), z + simulator.effectorHeight_()];
                 end
             end
+
+            % Tracking Arrays for Weapons
+            obj.directEnergyTrackTime = zeros(length(obj.UAS), 1);
+            obj.effectorLastFireTime = -inf(max(numel(obj.effectors), 1), 1);
+            obj.projectiles = repmat(simulator.emptyProjectile_(), 0, 1);
+            obj.projectileHandles = gobjects(0);
+            obj.projectileTrailHandles = gobjects(0);
+            obj.pendingKineticHits = repmat(simulator.emptyPendingShot_(), 0, 1);
         end
 
         function results = runSim(obj)
@@ -136,6 +187,8 @@ classdef simulator < handle
                 
                 targetFound = false; targetPos = []; targetObj = [];
 
+                uasTracked = false(numUAS, 1);
+
                 % 1. SENSE & MOVE UAS
                 for i = 1:numUAS
                     if ~uas_active(i); continue; end
@@ -147,7 +200,7 @@ classdef simulator < handle
                     elseif uasObj.mode == "HybridAStar"
                         uasObj.hybridAStarMotion(dt_local, tick_count, uasObj.turnRadius, obj.occMap)
                     elseif uasObj.mode == "Search"
-                        uasObj.searchMotion(dt_local, obj.asset, isAssetDestroyed, obj.NFZs);
+                        uasObj.searchMotion(dt_local, obj.asset, isAssetDestroyed);
                     end
                     pos = uasObj.position;
                     
@@ -168,7 +221,10 @@ classdef simulator < handle
                         track_hist(i, :) = [track_hist(i, 2:end), isPinged];
                     end
                     
-                    if sum(track_hist(i,:)) >= req_pings; isTracked = true; end
+                    if sum(track_hist(i,:)) >= req_pings
+                        isTracked = true; 
+                        uasTracked(i) = true;
+                    end
                     
                     if isPinged && animate_on
                          UASsensedPos = cat(1, UASsensedPos, [currentTime, pos]);
@@ -187,25 +243,63 @@ classdef simulator < handle
                 if targetFound && hasEffectors
                     obj.stepEffectors_(targetPos, targetObj);
                     
-                    % Update 3D array for collision checking
+                    % Update 3D array for collision/LOS checking
                     for k = 1:length(obj.effectors)
                         loc = obj.effectors(k).location;
                         z = terrainProxy(loc(1), loc(2)); 
-                        obj.effectors3D(k, :) = [loc(1), loc(2), z];
+                        obj.effectors3D(k, :) = [loc(1), loc(2), z + simulator.effectorHeight_()];
                     end
                 end
                 
-                % 3. CHECK COLLISIONS
+                % 3. CHECK COLLISIONS & WEAPONS
                 for i = 1:numUAS
                     if ~uas_active(i); continue; end
                     pos = obj.UAS(i).position;
                     uasObj = obj.UAS(i);
 
                     eventEffector = false;
-                    if sum(track_hist(i,:)) >= req_pings && hasEffectors
-                        effLocs = obj.effectors3D;
-                        d_eff = sqrt(sum((effLocs - pos).^2, 2));
-                        if any(d_eff <= effRanges); eventEffector = true; end
+                    
+                    % Determine Effector Hit based on Weapon Mode
+                    if uasTracked(i) && hasEffectors
+                        switch obj.weaponMode
+                            case "LEGACY"
+                                effLocs = obj.effectors3D;
+                                d_eff = sqrt(sum((effLocs(:, 1:2) - pos(1:2)).^2, 2));
+                                losOK = false(size(d_eff));
+                                for ee = 1:numel(d_eff)
+                                    if all(isfinite(effLocs(ee, :)))
+                                        losOK(ee) = obj.hasLineOfSight_(effLocs(ee, :), pos(1:3), simulator.losClearance_());
+                                    end
+                                end
+                                if any((d_eff <= effRanges) & losOK)
+                                    eventEffector = true;
+                                end
+                                
+                            case "DIRECT_ENERGY"
+                                d_eff = sqrt(sum((obj.effectors3D(:, 1:2) - pos(1:2)).^2, 2));
+                                inRangeMask = (d_eff <= effRanges);
+                                losMask = false(size(inRangeMask));
+                                for ee = 1:numel(inRangeMask)
+                                    if inRangeMask(ee) && all(isfinite(obj.effectors3D(ee, :)))
+                                        losMask(ee) = obj.hasLineOfSight_(obj.effectors3D(ee, :), pos(1:3), simulator.losClearance_());
+                                    end
+                                end
+                                if any(inRangeMask & losMask)
+                                    obj.directEnergyTrackTime(i) = obj.directEnergyTrackTime(i) + dt_local;
+                                else
+                                    obj.directEnergyTrackTime(i) = 0;
+                                end
+                                if obj.directEnergyTrackTime(i) >= obj.directEnergyDwellTime
+                                    eventEffector = true;
+                                end
+                            case "KINETIC"
+                                % Handled outside the UAS loop, but reset direct energy just in case
+                                obj.directEnergyTrackTime(i) = 0;
+                        end
+                    else
+                        if obj.weaponMode == "DIRECT_ENERGY"
+                            obj.directEnergyTrackTime(i) = 0;
+                        end
                     end
                     
                     eventAsset = false;
@@ -219,28 +313,61 @@ classdef simulator < handle
                     eventExit = tick_count > 10 && ((pos(1) <= 0) || (pos(1) >= obj.map.size.horiz) || (pos(2) <= 0) || (pos(2) >= obj.map.size.vert));
                     
                     if eventEffector
-                        % Time-invariant cost calculation
-                        cost = cost + cost_eff*1/d_asset*currentTime; 
+                        cost = cost + cost_eff; 
                         outcomeLog(end+1) = "Intercept";
                         UASkillLocations = [UASkillLocations; pos];
-                        uasObj.active = false; uas_active(i) = false; 
+                        uasObj.active = false; uas_active(i) = false; obj.UAS(i) = uasObj;
+                        obj.directEnergyTrackTime(i) = 0;
                         UASkilled = UASkilled + 1;
                         if animate_on; obj.map.animateUASkilled(pos); end
                         
                     elseif eventCrash
                         cost = cost + cost_leak; outcomeLog(end+1) = "TerrainCrash";
-                        uasObj.active = false; uas_active(i) = false;
+                        uasObj.active = false; uas_active(i) = false; obj.UAS(i) = uasObj;
                         if animate_on; obj.map.animateUAScrashed(pos); end
                         
                     elseif eventExit
                         cost = cost + cost_leak; outcomeLog(end+1) = "Escaped";
-                        uasObj.active = false; uas_active(i) = false;
+                        uasObj.active = false; uas_active(i) = false; obj.UAS(i) = uasObj;
                         
                     elseif eventAsset
                         if ~isAssetDestroyed
                             isAssetDestroyed = true;
                             cost = cost + cost_asset; outcomeLog(end+1) = "AssetHit";
                             if animate_on; obj.map.animateDestroyedAsset(obj.asset); end
+                        end
+                    end
+                end
+                
+                % 3.5. HANDLE KINETIC PROJECTILES
+                if obj.weaponMode == "KINETIC" && hasEffectors
+                    if obj.kineticUseFermiModel
+                        obj.launchKineticFermiShots_(currentTime, uas_active, uasTracked);
+                        [uas_active, killedIdx, killedPos] = obj.stepPendingKineticHits_(currentTime, uas_active);
+                    else
+                        obj.launchKineticProjectiles_(currentTime, uas_active, uasTracked);
+                        [uas_active, killedIdx, killedPos] = obj.stepProjectiles_(dt_local, uas_active);
+                        if animate_on
+                            obj.updateProjectileGraphics_();
+                        end
+                    end
+
+                    for kk = 1:numel(killedIdx)
+                        iKill = killedIdx(kk);
+                        uasObj = obj.UAS(iKill);
+                        if uasObj.active % Just double checking it wasn't already deactivated
+                            uasObj.active = false;
+                            obj.UAS(iKill) = uasObj;
+                            obj.directEnergyTrackTime(iKill) = 0;
+                            UASkilled = UASkilled + 1;
+                            cost = cost + cost_eff;
+                            UASkillLocations = [UASkillLocations; killedPos(kk, :)]; 
+                            if obj.kineticUseFermiModel
+                                outcomeLog(end + 1) = "Intercept_Kinetic_Fermi";
+                            else
+                                outcomeLog(end + 1) = "Intercept_Kinetic";
+                            end
+                            if animate_on; obj.map.animateUASkilled(killedPos(kk, :)); end
                         end
                     end
                 end
@@ -369,6 +496,311 @@ classdef simulator < handle
             ip = targetPosXY + vhat * spd * lookahead;
             hdg = atan2(vhat(2), vhat(1));
             interceptPose = [ip, hdg];
+        end
+
+        % -----------------------------------------------------------------
+        % WEAPON PHYSICS & LINE OF SIGHT HELPERS
+        % -----------------------------------------------------------------
+
+        function tf = hasLineOfSight_(obj, p0, p1, clearance)
+            if nargin < 4 || isempty(clearance)
+                clearance = 0;
+            end
+            n = max(25, ceil(norm(p1(1:2) - p0(1:2)) / 0.75));
+            s = linspace(0, 1, n);
+            x = p0(1) + s * (p1(1) - p0(1));
+            y = p0(2) + s * (p1(2) - p0(2));
+            z = p0(3) + s * (p1(3) - p0(3));
+
+            zTerr = obj.map.getElevation(x, y);
+            tf = all(z >= (zTerr + clearance));
+        end
+
+        function tf = segmentHitsTerrain_(obj, p0, p1, clearance)
+            if nargin < 4 || isempty(clearance)
+                clearance = 0;
+            end
+            n = max(10, ceil(norm(p1(1:2) - p0(1:2)) / 0.5));
+            s = linspace(0, 1, n);
+            x = p0(1) + s * (p1(1) - p0(1));
+            y = p0(2) + s * (p1(2) - p0(2));
+            z = p0(3) + s * (p1(3) - p0(3));
+
+            zTerr = obj.map.getElevation(x, y);
+            tf = any(z <= (zTerr + clearance));
+        end
+
+        function p3 = getGroundPoint3_(obj, x, y, zOffset)
+            if nargin < 5
+                zOffset = 0;
+            end
+            z = obj.map.getElevation(x, y);
+            p3 = [x, y, z + zOffset];
+        end
+
+        function launchKineticFermiShots_(obj, currentTime, uasActive, uasTracked)
+            if isempty(obj.effectors) || isempty(obj.UAS); return; end
+
+            for e = 1:numel(obj.effectors)
+                if (currentTime - obj.effectorLastFireTime(e)) < obj.kineticRefireTime
+                    continue
+                end
+
+                effLoc = obj.effectors(e).location(1:2);
+                effRange = obj.effectors(e).range;
+
+                if size(obj.effectors3D, 1) >= e && all(isfinite(obj.effectors3D(e, :)))
+                    shooterPos3 = obj.effectors3D(e, :);
+                else
+                    shooterPos3 = obj.getGroundPoint3_(effLoc(1), effLoc(2), simulator.effectorHeight_());
+                end
+
+                candidateIdx = []; candidateDist = inf; candidateTargetPos3 = [];
+                for i = 1:numel(obj.UAS)
+                    if ~uasActive(i) || (nargin >= 4 && ~isempty(uasTracked) && ~uasTracked(i)); continue; end
+                    
+                    targetObj = obj.UAS(i);
+                    targetPos3 = targetObj.position(1:3);
+                    d = norm(targetPos3(1:2) - effLoc);
+
+                    if d > effRange || ~obj.hasLineOfSight_(shooterPos3, targetPos3, simulator.losClearance_())
+                        continue
+                    end
+
+                    if d < candidateDist
+                        candidateIdx = i; candidateDist = d; candidateTargetPos3 = targetPos3;
+                    end
+                end
+
+                if isempty(candidateIdx); continue; end
+
+                pShot = obj.fermiShotProbability_(candidateDist, effRange);
+                pVolley = min(1, max(0, 1 - (1 - pShot)^obj.kineticShotsPerVolley));
+                travelTime = norm(candidateTargetPos3 - shooterPos3) / max(obj.kineticProjectileSpeed, eps);
+                
+                pending = simulator.emptyPendingShot_();
+                pending.active = true; pending.effectorIdx = e; pending.targetIdx = candidateIdx;
+                pending.fireTime = currentTime; pending.hitTime = currentTime + travelTime;
+                pending.willHit = (rand <= pVolley);
+
+                obj.pendingKineticHits(end + 1, 1) = pending; 
+                obj.effectorLastFireTime(e) = currentTime;
+            end
+        end
+
+        function pShot = fermiShotProbability_(obj, distanceToTarget, effectorRange)
+            d50 = max(0.5, obj.kineticFermiD50Scale * effectorRange);
+            k = max(0.10, obj.kineticFermiSharpnessScale * effectorRange);
+            pShot = min(1, max(0, obj.kineticHitProbability / (1 + exp((distanceToTarget - d50) / k))));
+        end
+
+        function [uasActive, killedIdx, killedPos] = stepPendingKineticHits_(obj, currentTime, uasActive)
+            killedIdx = zeros(0, 1); killedPos = zeros(0, 3);
+            if isempty(obj.pendingKineticHits); return; end
+
+            keep = true(numel(obj.pendingKineticHits), 1);
+            for sIdx = 1:numel(obj.pendingKineticHits)
+                shot = obj.pendingKineticHits(sIdx);
+                if ~shot.active; keep(sIdx) = false; continue; end
+                if currentTime < shot.hitTime; continue; end
+
+                keep(sIdx) = false;
+                tIdx = shot.targetIdx;
+                if tIdx >= 1 && tIdx <= numel(obj.UAS) && uasActive(tIdx) && shot.willHit
+                    uasActive(tIdx) = false;
+                    killedIdx(end + 1, 1) = tIdx; 
+                    killedPos(end + 1, :) = obj.UAS(tIdx).position; 
+                end
+            end
+            obj.pendingKineticHits = obj.pendingKineticHits(keep);
+        end
+
+        function launchKineticProjectiles_(obj, currentTime, uasActive, uasTracked) 
+            if isempty(obj.effectors) || isempty(obj.UAS); return; end
+
+            for e = 1:numel(obj.effectors)
+                if (currentTime - obj.effectorLastFireTime(e)) < obj.kineticRefireTime
+                    continue
+                end
+
+                effLoc = obj.effectors(e).location(1:2);
+                effRange = obj.effectors(e).range;
+
+                if size(obj.effectors3D, 1) >= e && all(isfinite(obj.effectors3D(e, :)))
+                    shooterPos3 = obj.effectors3D(e, :);
+                else
+                    shooterPos3 = obj.getGroundPoint3_(effLoc(1), effLoc(2), simulator.effectorHeight_());
+                end
+
+                candidateIdx = []; candidateDist = inf; candidateAimPoint = [];
+                for i = 1:numel(obj.UAS)
+                    if ~uasActive(i) || (nargin >= 4 && ~isempty(uasTracked) && ~uasTracked(i)); continue; end
+
+                    uasPos = obj.UAS(i).position(1:2);
+                    d = norm(uasPos - effLoc);
+
+                    targetObj = obj.UAS(i);
+                    targetPos3 = targetObj.position(1:3);
+
+                    if d > effRange || ~obj.hasLineOfSight_(shooterPos3, targetPos3, simulator.losClearance_())
+                        continue
+                    end
+
+                    [aimPoint3, canSolve] = obj.solveLinearIntercept_(shooterPos3, targetPos3, targetObj);
+                    if ~canSolve; aimPoint3 = targetPos3; end
+
+                    if d < candidateDist
+                        candidateIdx = i; candidateDist = d; candidateAimPoint = aimPoint3;
+                    end
+                end
+
+                if isempty(candidateIdx); continue; end
+
+                dir3 = candidateAimPoint - shooterPos3;
+                nDir = norm(dir3);
+                if nDir < eps; continue; end
+                vel3 = obj.kineticProjectileSpeed * (dir3 / nDir);
+
+                for s = 1:obj.kineticShotsPerVolley
+                    p = simulator.emptyProjectile_();
+                    p.active = true; p.pos = shooterPos3; p.prevPos = shooterPos3; p.vel = vel3;
+                    p.targetIdx = candidateIdx; p.hitEligible = (rand <= obj.kineticHitProbability);
+                    p.maxLife = max(1.0, 2.0 * max(norm(candidateAimPoint - shooterPos3), eps) / obj.kineticProjectileSpeed);
+                    p.trail = shooterPos3;
+
+                    if ~p.hitEligible
+                        missDir = randn(1, 3);
+                        missDir = missDir / max(norm(missDir), 1e-6);
+                        p.missOffset = missDir * max(1.5, obj.projectileHitTolerance * 2);
+                    end
+                    obj.projectiles(end + 1, 1) = p; 
+                end
+                obj.effectorLastFireTime(e) = currentTime;
+            end
+        end
+
+        function [uasActive, killedIdx, killedPos] = stepProjectiles_(obj, dtLocal, uasActive)
+            killedIdx = zeros(0, 1); killedPos = zeros(0, 3);
+            if isempty(obj.projectiles); return; end
+
+            keep = true(numel(obj.projectiles), 1);
+            xMin = obj.occMap.XWorldLimits(1); xMax = obj.occMap.XWorldLimits(2);
+            yMin = obj.occMap.YWorldLimits(1); yMax = obj.occMap.YWorldLimits(2);
+
+            for pIdx = 1:numel(obj.projectiles)
+                p = obj.projectiles(pIdx);
+                if ~p.active; keep(pIdx) = false; continue; end
+
+                oldPos = p.pos;
+                p.prevPos = oldPos; p.pos = p.pos + p.vel * dtLocal;
+                p.life = p.life + dtLocal; p.trail = [p.trail; p.pos]; 
+
+                if p.pos(1) < xMin || p.pos(1) > xMax || p.pos(2) < yMin || p.pos(2) > yMax || ...
+                   p.life > p.maxLife || obj.segmentHitsTerrain_(oldPos, p.pos, 0.02)
+                    keep(pIdx) = false; obj.projectiles(pIdx) = p; continue;
+                end
+
+                tIdx = p.targetIdx;
+                if tIdx >= 1 && tIdx <= numel(obj.UAS) && uasActive(tIdx)
+                    targetPos = obj.UAS(tIdx).position(1:3);
+                    if ~p.hitEligible; targetPos = targetPos + p.missOffset; end
+
+                    if simulator.pointToSegmentDistance3D_(targetPos, oldPos, p.pos) <= obj.projectileHitTolerance
+                        keep(pIdx) = false;
+                        if p.hitEligible
+                            uasActive(tIdx) = false;
+                            killedIdx(end + 1, 1) = tIdx; 
+                            killedPos(end + 1, :) = obj.UAS(tIdx).position; 
+                        end
+                    end
+                else
+                    keep(pIdx) = false; 
+                end
+                obj.projectiles(pIdx) = p;
+            end
+            obj.projectiles = obj.projectiles(keep);
+        end
+
+        function [aimPoint, canSolve] = solveLinearIntercept_(obj, shooterPos, targetPos, uasObj)
+            canSolve = false; aimPoint = targetPos;
+            vhat = [1 0];
+            if isprop(uasObj, "targetUnitVector")
+                v = uasObj.targetUnitVector(1:2);
+                if norm(v) > 0; vhat = v / norm(v); end
+            end
+            vTarget = [0 0 0];
+            if isprop(uasObj, "speed"); vTarget = [uasObj.speed * vhat, 0]; end
+
+            r = targetPos - shooterPos;
+            s = obj.kineticProjectileSpeed;
+            a = dot(vTarget, vTarget) - s^2;
+            b = 2 * dot(r, vTarget);
+            c = dot(r, r);
+
+            if abs(a) < 1e-12
+                t = (abs(b) < 1e-12) * 0 + (abs(b) >= 1e-12) * (-c / b);
+                if t > 0; aimPoint = targetPos + vTarget * t; canSolve = true; end
+                return
+            end
+
+            disc = b^2 - 4 * a * c;
+            if disc < 0; return; end
+
+            tCandidates = [(-b + sqrt(disc)) / (2 * a), (-b - sqrt(disc)) / (2 * a)];
+            tCandidates = tCandidates(tCandidates > 0);
+            if ~isempty(tCandidates)
+                aimPoint = targetPos + vTarget * min(tCandidates);
+                canSolve = true;
+            end
+        end
+
+        function updateProjectileGraphics_(obj)
+            if ~isempty(obj.projectileHandles)
+                for k = 1:numel(obj.projectileHandles)
+                    if isgraphics(obj.projectileHandles(k)); delete(obj.projectileHandles(k)); end
+                    if isgraphics(obj.projectileTrailHandles(k)); delete(obj.projectileTrailHandles(k)); end
+                end
+            end
+            if isempty(obj.projectiles); return; end
+            
+            ax = gca; holdState = ishold(ax); hold(ax, 'on');
+            nProj = numel(obj.projectiles);
+            obj.projectileHandles = gobjects(nProj, 1);
+            obj.projectileTrailHandles = gobjects(nProj, 1);
+
+            for k = 1:nProj
+                pos = obj.projectiles(k).pos; trail = obj.projectiles(k).trail;
+                obj.projectileTrailHandles(k) = plot3(ax, trail(:, 1), trail(:, 2), trail(:, 3), 'r-', 'LineWidth', 2);
+                obj.projectileHandles(k) = plot3(ax, pos(1), pos(2), pos(3), 'ro', 'MarkerSize', 8, 'MarkerFaceColor', 'r');
+            end
+            if ~holdState; hold(ax, 'off'); end
+        end
+    end
+
+    methods (Static, Access = private)
+        function p = emptyProjectile_()
+            p = struct('active', false, 'pos', [0 0 0], 'prevPos', [0 0 0], 'vel', [0 0 0], ...
+                'targetIdx', 0, 'hitEligible', false, 'missOffset', [0 0 0], 'life', 0, 'maxLife', 0, 'trail', zeros(0, 3));
+        end
+
+        function s = emptyPendingShot_()
+            s = struct('active', false, 'effectorIdx', 0, 'targetIdx', 0, 'fireTime', 0, 'hitTime', 0, ...
+                'pShot', 0, 'pVolley', 0, 'travelTime', 0, 'rangeAtFire', 0, 'willHit', false);
+        end
+
+        function d = pointToSegmentDistance3D_(pt, a, b)
+            ab = b - a; denom = dot(ab, ab);
+            if denom <= eps; d = norm(pt - a); return; end
+            t = max(0, min(1, dot(pt - a, ab) / denom));
+            d = norm(pt - (a + t * ab));
+        end
+
+        function h = effectorHeight_()
+            h = 1.2;
+        end
+
+        function c = losClearance_()
+            c = 0.10;
         end
     end
 end

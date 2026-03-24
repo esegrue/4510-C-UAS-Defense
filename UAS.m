@@ -7,7 +7,6 @@ classdef UAS < handle
         targetUnitVector
         range
         active
-        obstacles
         destroyedAsset
         totalAsset
         tempSpeed
@@ -27,7 +26,6 @@ classdef UAS < handle
             arguments
                 speed, entrance, target, mode, altitude, turnRadius
                 options.adversary_path = [];
-
             end
             obj.speed = speed;
             obj.altitude = altitude;
@@ -36,8 +34,16 @@ classdef UAS < handle
             obj.target = target;
             obj.mode = mode;
             obj.tempSpeed = speed;
+            
+            % Safe vector normalization
             dir2D = obj.target(1:2) - obj.position(1:2);
-            obj.targetUnitVector = [dir2D/norm(dir2D), 0]; % Z-component is 0
+            nDir = norm(dir2D);
+            if nDir > 0
+                obj.targetUnitVector = [dir2D/nDir, 0]; 
+            else
+                obj.targetUnitVector = [1, 0, 0]; 
+            end
+            
             obj.active = true; % Default to active
 
             obj.adversary_path = options.adversary_path; %please note that this will have both ingress and egress
@@ -57,21 +63,20 @@ classdef UAS < handle
                 obj.position = obj.position + obj.speed*time*obj.targetUnitVector;
             end
         end
+        
         function hybridAStarMotion(obj, time, tick, turnRadius, costMap)
             if obj.active
-                if isempty(obj.planner) & isempty(obj.adversary_path) %i.e. we haven't passed a pre-planned path in
+                if isempty(obj.planner) && isempty(obj.adversary_path) %i.e. we haven't passed a pre-planned path in
                     ss = stateSpaceSE2;
                     ss.StateBounds = [costMap.XWorldLimits; costMap.YWorldLimits; -pi pi];
                     sv = validatorOccupancyMap(ss);
                     sv.Map = costMap;
-                    %show(costMap)
                     obj.planner = plannerHybridAStar(sv, 'MinTurningRadius', turnRadius, "InterpolationDistance",obj.speed*time);
                     % Plan initial path
                     refPath = plan(obj.planner, [obj.position(1:2), obj.heading], [obj.target, obj.heading+pi/2]);
                     obj.pathPoints = refPath.States(:, 1:2);  % Just x,y coordinates
                     obj.pathHeadings = refPath.States(:,3);
-                    pts = refPath.States; % [x y theta]
-                    fprintf("WARNING: Generating paths in-loop. Consider pre-generating for speed.")
+                    fprintf("WARNING: Generating paths in-loop. Consider pre-generating for speed.\n")
                 end
     
                 if tick-obj.tickOffset~=0
@@ -80,7 +85,6 @@ classdef UAS < handle
                         obj.position = [pose(1), pose(2), obj.position(3)];
                         obj.heading = obj.pathHeadings(tick - obj.tickOffset);
                         
-      
                     elseif isempty(obj.adversary_path) %reached end of path, now escape (only need to generate if no pre-gen path)
                         positionxy = [obj.position(1), obj.position(2)];
                         posEsc = [costMap.XWorldLimits(1), obj.position(2); obj.position(1), costMap.YWorldLimits(1); costMap.XWorldLimits(2), obj.position(2); obj.position(1), costMap.YWorldLimits(2)];
@@ -88,8 +92,6 @@ classdef UAS < handle
                         obj.target = posEsc(Iesc, :);
                         refPath = plan(obj.planner, [positionxy, obj.heading], [obj.target, obj.heading]);
                         obj.pathPoints = refPath.States(:, 1:2);  % Just x,y coordinates
-                        pts = refPath.States; % [x y theta]
-                        %plot(pts(:,1), pts(:,2), 'g--', 'LineWidth', 2);
                         obj.tickOffset = tick-1;
                         pose = obj.pathPoints(tick - obj.tickOffset,:);
                         obj.position = [pose(1), pose(2), obj.position(3)];
@@ -101,17 +103,12 @@ classdef UAS < handle
             end
         end
 
-        function searchMotion(obj, time, asset, isAssetDestroyed, NFZs)
+        function searchMotion(obj, time, asset, isAssetDestroyed)
             if ~obj.active
                 return;
             end
             
             obj.range = 20;
-            obj.obstacles.NFZs = NFZs;
-            obj.obstacles.asset = asset;
-            
-            % avoidNFZ logic needs to be fixed to actually turn the UAS
-            obj.avoidNFZ(); 
 
             if ~isAssetDestroyed
                 dist2D = norm(obj.position(1:2) - asset.location(1:2));
@@ -119,7 +116,7 @@ classdef UAS < handle
                 if dist2D <= obj.range
                     obj.assetFound(dist2D, asset.location, time);
                 else
-                    obj.position = obj.position + obj.speed*time*obj.targetUnitVector;
+                    obj.position = obj.position + obj.tempSpeed*time*obj.targetUnitVector;
                 end
             end
         end
@@ -128,10 +125,13 @@ classdef UAS < handle
             turnRadius = assetDistance/2;
             
             assetVector = [assetLocation, 0] - [obj.position(1:2), 0];
-            
             tuv = [obj.targetUnitVector(1:2), 0];
             
-            turnAngle = acos(dot(tuv, assetVector)/(norm(tuv)*norm(assetVector)));
+            % Safe ACOS calculation to prevent complex numbers
+            dotProd = dot(tuv, assetVector)/(norm(tuv)*norm(assetVector));
+            dotProd = max(-1, min(1, dotProd));
+            turnAngle = acos(dotProd);
+            
             rotDir = cross(tuv, assetVector);
             
             angleVelo = (sin(turnAngle)*obj.speed)/turnRadius;
@@ -157,19 +157,6 @@ classdef UAS < handle
             obj.targetUnitVector = [newVec2D, 0];
             
             obj.position = obj.position + obj.tempSpeed*time*obj.targetUnitVector;
-        end
-
-        function avoidNFZ(obj)
-            % detects but does not yet turn
-            if isinterior(obj.obstacles.NFZs, obj.position + obj.targetUnitVector*obj.range)
-                angle = linspace(-pi/4, pi/4, 100);
-                options = zeros(100, 2);
-                for n = 1:length(angle)
-                    check = obj.position' + [cos(-angle(n)) -sin(-angle(n)); sin(-angle(n)) cos(-angle(n))]*obj.targetUnitVector'*obj.range;
-                    options(n, :) = check';
-                end
-                crash = find(isinterior(obj.obstacles.NFZs, options) == true);
-            end
         end
     end
 end

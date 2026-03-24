@@ -56,7 +56,7 @@ classdef map < handle
             if isempty(obj.terrainProxy)
                 z = zeros(size(x));
             else
-                z = obj.terrainProxy(x,y);
+                z = obj.terrainProxy(x, y);
             end
         end
 
@@ -89,8 +89,8 @@ classdef map < handle
             end
 
             obj.UASsensed = plot3(NaN, NaN, NaN, 'Color', 'k', 'Marker', 'o', 'LineStyle', 'none', 'DisplayName', "Detection");
-            obj.UASkilled = plot3(NaN, NaN, NaN, 'Marker', 'x', 'Color', 'g', 'MarkerSize', 12, 'DisplayName', "Kill Event");
-            obj.UAScrashed = plot3(NaN, NaN, NaN, 'Marker', 'x', 'Color', 'k', 'LineWidth', 2, 'MarkerSize', 15, 'DisplayName', "Terrain Crash");
+            obj.UASkilled = plot3(NaN, NaN, NaN, 'Marker', 'x', 'Color', 'g', 'LineWidth', 2, 'MarkerSize', 15, 'LineStyle', 'none', 'DisplayName', "Kill Event");
+            obj.UAScrashed = plot3(NaN, NaN, NaN, 'Marker', 'x', 'Color', 'k', 'LineWidth', 2, 'MarkerSize', 15, 'LineStyle', 'none', 'DisplayName', "Terrain Crash");
             obj.assetDestroyed = plot3(NaN, NaN, NaN, 'Marker', 'x', 'Color', 'r', 'MarkerSize', 20, 'LineWidth', 2, 'DisplayName', "Asset Destroyed");
 
             if ~hideClock
@@ -158,7 +158,18 @@ classdef map < handle
         end
 
         function animateUAScrashed(obj, position)
-            set(obj.UAScrashed, 'XData', position(1), 'YData', position(2), 'ZData', position(3));
+            xData = get(obj.UAScrashed, 'XData');
+            yData = get(obj.UAScrashed, 'YData');
+            zData = get(obj.UAScrashed, 'ZData');
+            
+            if isscalar(xData) && isnan(xData)
+                set(obj.UAScrashed, 'XData', position(1), 'YData', position(2), 'ZData', position(3));
+            else
+                set(obj.UAScrashed, ...
+                    'XData', [xData, position(1)], ...
+                    'YData', [yData, position(2)], ...
+                    'ZData', [zData, position(3)]);
+            end
         end
 
         function updateUASAnimation(obj, UASPos_all)
@@ -185,7 +196,18 @@ classdef map < handle
         end
 
         function animateUASkilled(obj, position)
-             set(obj.UASkilled, 'XData', position(1), 'YData', position(2), 'ZData', position(3))
+            xData = get(obj.UASkilled, 'XData');
+            yData = get(obj.UASkilled, 'YData');
+            zData = get(obj.UASkilled, 'ZData');
+        
+            if isscalar(xData) && isnan(xData)
+                set(obj.UASkilled, 'XData', position(1), 'YData', position(2), 'ZData', position(3));
+            else
+                set(obj.UASkilled, ...
+                    'XData', [xData, position(1)], ...
+                    'YData', [yData, position(2)], ...
+                    'ZData', [zData, position(3)]);
+            end
         end
 
         function updateClock(obj, time)
