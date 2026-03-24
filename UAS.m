@@ -66,15 +66,14 @@ classdef UAS < handle
         
         function hybridAStarMotion(obj, time, tick, turnRadius, costMap)
             if obj.active
-                if isempty(obj.planner) && isempty(obj.adversary_path) %i.e. we haven't passed a pre-planned path in
+                if isempty(obj.planner) && isempty(obj.adversary_path) 
                     ss = stateSpaceSE2;
                     ss.StateBounds = [costMap.XWorldLimits; costMap.YWorldLimits; -pi pi];
                     sv = validatorOccupancyMap(ss);
                     sv.Map = costMap;
                     obj.planner = plannerHybridAStar(sv, 'MinTurningRadius', turnRadius, "InterpolationDistance",obj.speed*time);
-                    % Plan initial path
                     refPath = plan(obj.planner, [obj.position(1:2), obj.heading], [obj.target, obj.heading+pi/2]);
-                    obj.pathPoints = refPath.States(:, 1:2);  % Just x,y coordinates
+                    obj.pathPoints = refPath.States(:, 1:2); 
                     obj.pathHeadings = refPath.States(:,3);
                     fprintf("WARNING: Generating paths in-loop. Consider pre-generating for speed.\n")
                 end
@@ -85,17 +84,22 @@ classdef UAS < handle
                         obj.position = [pose(1), pose(2), obj.position(3)];
                         obj.heading = obj.pathHeadings(tick - obj.tickOffset);
                         
-                    elseif isempty(obj.adversary_path) %reached end of path, now escape (only need to generate if no pre-gen path)
+                    elseif isempty(obj.adversary_path) 
                         positionxy = [obj.position(1), obj.position(2)];
                         posEsc = [costMap.XWorldLimits(1), obj.position(2); obj.position(1), costMap.YWorldLimits(1); costMap.XWorldLimits(2), obj.position(2); obj.position(1), costMap.YWorldLimits(2)];
                         [~, Iesc] = min(sum((posEsc - positionxy).^2, 2));
                         obj.target = posEsc(Iesc, :);
                         refPath = plan(obj.planner, [positionxy, obj.heading], [obj.target, obj.heading]);
-                        obj.pathPoints = refPath.States(:, 1:2);  % Just x,y coordinates
+                        obj.pathPoints = refPath.States(:, 1:2);  
                         obj.tickOffset = tick-1;
                         pose = obj.pathPoints(tick - obj.tickOffset,:);
                         obj.position = [pose(1), pose(2), obj.position(3)];
                         obj.pathHeadings = refPath.States(:,3);
+                        
+                    else
+                        % BUG FIX: Coast straight forward if pre-planned points run out
+                        obj.targetUnitVector = [cos(obj.heading), sin(obj.heading), 0];
+                        obj.position = obj.position + obj.speed * time * obj.targetUnitVector;
                     end
                 else
                     obj.position = obj.position;

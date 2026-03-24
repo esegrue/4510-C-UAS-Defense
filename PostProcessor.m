@@ -3,9 +3,6 @@ clear; clc; close all;
 %% USER CONFIGURATION
 % -------------------
 
-% LOADING DATA
-visConfig.fileToLoad = ''; % or provide a filename ('SimData_XXXXXXXX_XXXXXX.mat')
-
 % VISUALIZATION SETTINGS
 visConfig.topN = 10; % number of top configs to analyze
 visConfig.heatmapBins = 30; % resolution of heatmap
@@ -17,44 +14,77 @@ replayConfig.specificID = 1; % replay ID (only use if mode is 'Specific')
 replayConfig.tps = 20; % replay simulation speed (ticks/sec)
 replayConfig.animMult = 5; % animation speed multiplier
 
-%% LOAD DATA
-% ----------
+%% LOAD & STITCH BATCH DATA
+% -------------------------
+disp('Please select all SimData_Batch files from your run...');
+[fileNames, pathName] = uigetfile('SimData_Batch_*.mat', 'Select all Batch files for this run', 'MultiSelect', 'on');
 
-if isempty(visConfig.fileToLoad)
-    files = dir('SimData_*.mat');
-    if isempty(files)
-        error('No simulation data files found.');
-    end
-    [~, idx] = max([files.datenum]); 
-    fileToLoad = files(idx).name;
-else
-    fileToLoad = visConfig.fileToLoad;
-    if ~exist(fileToLoad, 'file')
-        error('Specified file not found: %s', fileToLoad);
-    end
+if isequal(fileNames,0)
+   error('No files selected. Exiting.');
 end
 
-fprintf('Loading data from: %s\n', fileToLoad);
-load(fileToLoad, 'SimResults');
+% Convert to cell array if only one file is selected
+if ischar(fileNames)
+    fileNames = {fileNames}; 
+end
+
+fprintf('Loading and stitching %d batch files...\n', length(fileNames));
+
+combinedConfigs = [];
+for i = 1:length(fileNames)
+    fullPath = fullfile(pathName, fileNames{i});
+    data = load(fullPath, 'SimResults');
+    
+    if i == 1
+        % Extract global data from the first batch
+        mapObj = data.SimResults.MapData;
+        asset = data.SimResults.Asset;
+        sensors = data.SimResults.Sensors;
+        metadata = data.SimResults.Metadata;
+        costConfig = metadata.CostConfig;
+    end
+    
+    % Append the configurations
+    combinedConfigs = [combinedConfigs, data.SimResults.Configs];
+end
+
+% Sort stitched configurations by their ID to ensure perfect order
+[~, sortIdx] = sort([combinedConfigs.ID]);
+combinedConfigs = combinedConfigs(sortIdx);
+
+% Reconstruct the SimResults structure in memory
+SimResults.Configs = combinedConfigs;
+SimResults.MapData = mapObj;
+SimResults.Asset = asset;
+SimResults.Sensors = sensors;
+SimResults.Metadata = metadata;
+numConfigs = length(combinedConfigs);
+SimResults.NumConfigsRun = numConfigs;
+
 load('adversary_paths_bank.mat', 'adversary_paths_bank');
-
-% unpacking variables
-mapObj = SimResults.MapData;
-asset = SimResults.Asset;
-sensors = SimResults.Sensors;
-costConfig = SimResults.Metadata.CostConfig;
-numConfigs = SimResults.NumConfigsRun;
-bestID = SimResults.BestConfigID;
-
-% set bounds
-topN = min(visConfig.topN, numConfigs);
-mapBounds = SimResults.Metadata.MapBounds;
-mapL = mapBounds(2); mapW = mapBounds(4);
 
 % arrays for plotting
 CostperCombo = [SimResults.Configs.CostMean];
 ReliabilityScore = [SimResults.Configs.Reliability];
 
+% Find the overall Best ID across all batches
+validMask = ReliabilityScore >= metadata.ReliabilityThreshold;
+if ~any(validMask)
+    [~, bestID] = max(ReliabilityScore);
+else
+    validCosts = CostperCombo(validMask);
+    [~, minIdx] = min(validCosts);
+    validIDs = find(validMask);
+    bestID = validIDs(minIdx);
+end
+SimResults.BestConfigID = bestID;
+
+fprintf('Successfully stitched %d configurations. Best Config is #%d.\n', numConfigs, bestID);
+
+% set bounds
+topN = min(visConfig.topN, numConfigs);
+mapBounds = SimResults.Metadata.MapBounds;
+mapL = mapBounds(2); mapW = mapBounds(4);
 
 %% KILL ZONE HEATMAP
 % ------------------
@@ -211,23 +241,15 @@ replayEffectors = SimResults.Configs(targetID).Effectors;
 trialsToReplay = SimResults.Configs(targetID).Trials;
 numReplays = length(trialsToReplay);
 
-% Extract Weapon Config
-if isfield(SimResults.Metadata, 'weaponConfig')
-    wC = SimResults.Metadata.weaponConfig;
-    wMode = wC.mode;
-    wDwell = wC.directEnergyDwellTime;
-    wKinSpd = wC.kineticProjectileSpeed;
-    wKinShots = wC.kineticShotsPerVolley;
-    wKinHitP = wC.kineticHitProbability;
-    wKinRefire = wC.kineticRefireTime;
-    wKinTol = wC.projectileHitTolerance;
-    wFermi = wC.kineticUseFermiModel;
-else
-    % Fallbacks if run from older data
-    wMode = "LEGACY";
-    wDwell = 0.75; wKinSpd = 30; wKinShots = 1; 
-    wKinHitP = 0.7; wKinRefire = 0.5; wKinTol = 0.75; wFermi = true;
-end
+% Extract Direct Weapon Config
+wC = SimResults.Metadata.weaponConfig;
+wDwell = wC.directEnergyDwellTime;
+wKinSpd = wC.kineticProjectileSpeed;
+wKinShots = wC.kineticShotsPerVolley;
+wKinHitP = wC.kineticHitProbability;
+wKinRefire = wC.kineticRefireTime;
+wKinTol = wC.projectileHitTolerance;
+wFermi = wC.kineticUseFermiModel;
 
 for k = 1:numReplays
 
@@ -242,14 +264,10 @@ for k = 1:numReplays
     % redefine UAS
     uasArray = UAS.empty(0, numAdversaries);
     
-    if isfield(SimResults.Metadata, 'advConfig')
-        uSpeed = SimResults.Metadata.advConfig.speed;
-        uTurn = SimResults.Metadata.advConfig.turnRadius;
-        uPlan = SimResults.Metadata.advConfig.planner;
-        uAlt_default = SimResults.Metadata.advConfig.altitude;
-    else
-        uSpeed = 15; uTurn = 25; uPlan = 'HybridAStar';
-    end
+    uSpeed = SimResults.Metadata.advConfig.speed;
+    uTurn = SimResults.Metadata.advConfig.turnRadius;
+    uPlan = SimResults.Metadata.advConfig.planner;
+    uAlt_default = SimResults.Metadata.advConfig.altitude;
     
     for u = 1:numAdversaries
         if size(replayStartPos, 2) >= 3
@@ -261,9 +279,8 @@ for k = 1:numReplays
         uasArray(u) = UAS(uSpeed, replayStartPos(u,:), asset.location, uPlan, uAlt, uTurn, "adversary_path", path);
     end
     
-    % redefine simulator (Removed the nfzs argument here!)
+    % redefine simulator
     sim = simulator(mapObj, uasArray, replayEffectors, sensors, asset, 'tps', replayConfig.tps, 'animate', true, 'fadePings', true, 'resetGraphics', true, 'animationMultiplier', replayConfig.animMult, 'costConfig', costConfig, ...
-        'weaponMode', wMode, ...
         'directEnergyDwellTime', wDwell, ...
         'kineticProjectileSpeed', wKinSpd, ...
         'kineticShotsPerVolley', wKinShots, ...

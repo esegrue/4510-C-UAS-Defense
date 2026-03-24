@@ -1,12 +1,11 @@
 clear; clc; close all;
 
-
 %%  USER CONFIGURATION
 %  -------------------
-
 % OPTIMIZATION SETTINGS
 mcSettings.maxConfigs = 5; % max number of effector configs to test
 mcSettings.testsPerConfig = 5; %  trials per configuration
+mcSettings.batchSize = 2; % Save to a new file every N configurations and clear RAM
 mcSettings.convergenceDelta = 100; % stop if separation > delta
 mcSettings.confidenceAlpha = 0.1; % Student's t-test alpha (0.1 = 90% conf)
 mcSettings.reliabilityThresh = 90; % minimum reliability (%) to be valid
@@ -26,8 +25,10 @@ effConfig.mobileSpeed = 12; % speed of mobile effectors (units/s)
 effConfig.range = 20; % interception radius (units)
 effConfig.posBankFile = "effector_posn_bank.mat";
 
-% WEAPON SETTINGS
-weaponConfig.mode = "KINETIC"; % "LEGACY", "DIRECT_ENERGY", or "KINETIC"
+% WEAPON SETTINGS (Heterogeneous Loadouts)
+weaponConfig.numLegacy = 0;       % Count of instant-kill effectors
+weaponConfig.numDirectEnergy = 1; % Count of laser effectors
+weaponConfig.numKinetic = 2;      % Count of projectile effectors
 weaponConfig.directEnergyDwellTime = 0.75;
 weaponConfig.kineticProjectileSpeed = 30;
 weaponConfig.kineticShotsPerVolley = 3;
@@ -60,12 +61,9 @@ simConfig.numCores = feature("numcores")/2;
 simConfig.tps = 20; % time steps per second
 simConfig.animateLive = false; % animate? (slows down processing)
 
-
 %% SIMULATION SETUP
 % -----------------
-
 rng('shuffle')
-
 % define map
 load big_island_map.mat
 mapObj = elevationMap;
@@ -79,13 +77,13 @@ scenarioStore = cell(mcSettings.maxConfigs, 1);
 pathStore = cell(mcSettings.maxConfigs, 1);
 costDetailsStore = cell(mcSettings.maxConfigs, 1); 
 killStore = cell(mcSettings.maxConfigs, 1);
+rngStore = cell(mcSettings.maxConfigs, 1); % Added to properly store RNG states across loops
 
 CostperCombo = nan(mcSettings.maxConfigs, 1);
 ReliabilityScore = nan(mcSettings.maxConfigs, 1); 
 LCB = nan(mcSettings.maxConfigs, 1); 
 UCB = nan(mcSettings.maxConfigs, 1); 
 separation = nan(mcSettings.maxConfigs, 1);
-
 
 % load position and path banks
 if isfile(effConfig.posBankFile)
@@ -113,16 +111,23 @@ for i = 1:sensConfig.count
     end
 end
 
-% define effector template
+% define effector template & validate weapon counts
 effConfig.totalEffectors = effConfig.numStatic + effConfig.numMobile;
+weaponTypes = [repmat("LEGACY", 1, weaponConfig.numLegacy), ...
+               repmat("DIRECT_ENERGY", 1, weaponConfig.numDirectEnergy), ...
+               repmat("KINETIC", 1, weaponConfig.numKinetic)];
+               
+if length(weaponTypes) ~= effConfig.totalEffectors
+    error('The sum of weapon types must exactly equal effConfig.totalEffectors.');
+end
 effectorStructTemplate = struct('location', [0,0], 'range', effConfig.range, ...
-    'mode', "STATIC", 'speed', 0, 'heading', 0, 'planner', [], ...
+    'mode', "STATIC", 'weaponMode', "LEGACY", 'speed', 0, 'heading', 0, 'planner', [], ...
     'path', [], 'pathIdx', 1, 'lastPlanTick', -inf, 'lastInterceptPose', [nan nan nan]);
 
 %% MONTE CARLO SIMULATION
 % -----------------------
-
 numConfigs = 0;
+batchStartIdx = 1; % Tracks where the current save batch begins
 fprintf('Starting Monte Carlo Simulation...\n');
 
 while numConfigs < mcSettings.maxConfigs
@@ -135,6 +140,7 @@ while numConfigs < mcSettings.maxConfigs
     currentEffectors = repmat(effectorStructTemplate, effConfig.totalEffectors, 1);
     for e = 1:effConfig.totalEffectors
         currentEffectors(e).location = effPos(e, :);
+        currentEffectors(e).weaponMode = weaponTypes(e); % Individually assign weapon
         if e <= effConfig.numStatic
             currentEffectors(e).mode = "STATIC";
             currentEffectors(e).speed = 0;
@@ -144,21 +150,20 @@ while numConfigs < mcSettings.maxConfigs
         end
     end
     configStore{numConfigs} = currentEffectors;
-
+    
     % 2. INITIALIZE STORAGE
     runCosts = zeros(mcSettings.testsPerConfig, 1); 
     runStarts = cell(mcSettings.testsPerConfig, 1);
     runPaths = cell(mcSettings.testsPerConfig, 1);
     runFailures = zeros(mcSettings.testsPerConfig, 1);
     runKills = cell(mcSettings.testsPerConfig, 1);
+    runRNGStates = cell(mcSettings.testsPerConfig, 1);
     
     % 3. RUN TESTS
     if simConfig.parallel
         parpool(simConfig.numCores)
         parfor j = 1:mcSettings.testsPerConfig
-
             rng(trialSeeds(numConfigs, j), 'twister');
-
             uasArray = UAS.empty(0, advConfig.count);
             pathIdxs = zeros(advConfig.count, 1);
             starts = zeros(advConfig.count, 3);
@@ -183,8 +188,8 @@ while numConfigs < mcSettings.maxConfigs
             end
             
             rngState = rng;
+            % Removed global weaponMode definition here
             sim = simulator(mapObj, uasArray, currentEffectors, sensors, asset, 'tps', simConfig.tps, 'animate', false, 'resetGraphics', false, 'costConfig', costConfig, ...
-                'weaponMode', weaponConfig.mode, ...
                 'directEnergyDwellTime', weaponConfig.directEnergyDwellTime, ...
                 'kineticProjectileSpeed', weaponConfig.kineticProjectileSpeed, ...
                 'kineticShotsPerVolley', weaponConfig.kineticShotsPerVolley, ...
@@ -193,12 +198,10 @@ while numConfigs < mcSettings.maxConfigs
                 'projectileHitTolerance', weaponConfig.projectileHitTolerance, ...
                 'kineticUseFermiModel', weaponConfig.kineticUseFermiModel);
             runResults = sim.runSim();
-
             runRNGStates{j} = rngState;
             runCosts(j) = runResults.cost;
             runStarts{j} = starts;
             runPaths{j} = pathIdxs;
-
             if isfield(runResults, 'UASkillLocations') && ~isempty(runResults.UASkillLocations)
                 runKills{j} = runResults.UASkillLocations;
             end
@@ -209,7 +212,6 @@ while numConfigs < mcSettings.maxConfigs
         end
     else
         for j = 1:mcSettings.testsPerConfig
-
             rng(trialSeeds(numConfigs, j), 'twister');
     
             uasArray = UAS.empty(0, advConfig.count);
@@ -237,7 +239,6 @@ while numConfigs < mcSettings.maxConfigs
             rngState = rng;
             
             sim = simulator(mapObj, uasArray, currentEffectors, sensors, asset, 'tps', simConfig.tps, 'animate', simConfig.animateLive, 'resetGraphics', true, 'costConfig', costConfig, ...
-                'weaponMode', weaponConfig.mode, ...
                 'directEnergyDwellTime', weaponConfig.directEnergyDwellTime, ...
                 'kineticProjectileSpeed', weaponConfig.kineticProjectileSpeed, ...
                 'kineticShotsPerVolley', weaponConfig.kineticShotsPerVolley, ...
@@ -261,7 +262,6 @@ while numConfigs < mcSettings.maxConfigs
             end
         end
     end
-
     currentConfigKills = vertcat(runKills{:});
     runFailures = sum(runFailures);
     
@@ -271,7 +271,8 @@ while numConfigs < mcSettings.maxConfigs
     costDetailsStore{numConfigs} = runCosts;
     CostperCombo(numConfigs) = mean(runCosts);
     killStore{numConfigs} = currentConfigKills;
-
+    rngStore{numConfigs} = runRNGStates; % Save RNG states for replay capability
+    
     % 5. CONVERGENCE
     currentReliability = 100 * (1 - (runFailures / mcSettings.testsPerConfig));
     ReliabilityScore(numConfigs) = currentReliability;
@@ -305,13 +306,74 @@ while numConfigs < mcSettings.maxConfigs
             min(CostperCombo(rivalsMask)), separation(numConfigs));
     end
     
-    if separation(numConfigs) > mcSettings.convergenceDelta
-        fprintf('Monte Carlo Simulation converged!\n');
-        break
+    % --- 6. BATCH SAVING & RAM FLUSH ---
+    if mod(numConfigs, mcSettings.batchSize) == 0 || numConfigs == mcSettings.maxConfigs || separation(numConfigs) > mcSettings.convergenceDelta
+        fprintf('Saving Batch (Configs %d to %d) to disk and clearing RAM...\n', batchStartIdx, numConfigs);
+        
+        SimResults = struct();
+        SimResults.Metadata = struct(...
+            'Timestamp', datestr(now), ...
+            'MapBounds', mapBounds, ...
+            'NumAdversaries', advConfig.count, ...
+            'NumSensors', sensConfig.count, ...
+            'NumEffectors', effConfig.totalEffectors, ...
+            'CostConfig', costConfig, ...
+            'ReliabilityThreshold', mcSettings.reliabilityThresh, ...
+            'SensorParams', sensConfig.params, ...
+            'EffectorRange', effConfig.range, ...
+            'MCSettings', mcSettings, ... 
+            'advConfig', advConfig, ...
+            'weaponConfig', weaponConfig ...
+        );
+
+        SimResults.MapData = mapObj; 
+        SimResults.Asset = asset; 
+        SimResults.Sensors = sensors;
+        SimResults.Configs = struct();
+        
+        idx = 1;
+        for i = batchStartIdx:numConfigs
+            SimResults.Configs(idx).ID = i;
+            SimResults.Configs(idx).Effectors = configStore{i};
+            SimResults.Configs(idx).CostMean = CostperCombo(i);
+            SimResults.Configs(idx).Reliability = ReliabilityScore(i);
+            SimResults.Configs(idx).LCB = LCB(i);
+            SimResults.Configs(idx).UCB = UCB(i);
+            SimResults.Configs(idx).KillLocations = killStore{i};
+            
+            SimResults.Configs(idx).Trials = struct();
+            for t = 1:mcSettings.testsPerConfig
+                SimResults.Configs(idx).Trials(t).rngState = rngStore{i}{t};
+                SimResults.Configs(idx).Trials(t).Starts = scenarioStore{i}{t};
+                SimResults.Configs(idx).Trials(t).Paths = pathStore{i}{t};
+                SimResults.Configs(idx).Trials(t).Cost = costDetailsStore{i}(t);
+            end
+            idx = idx + 1;
+        end
+        
+        fileName = sprintf('SimData_Batch_%dto%d_%s.mat', batchStartIdx, numConfigs, datestr(now, 'yyyymmdd_HHMMSS'));
+        save(fileName, 'SimResults', '-v7.3');
+        
+        % Free memory
+        for i = batchStartIdx:numConfigs
+            configStore{i} = [];
+            scenarioStore{i} = [];
+            pathStore{i} = [];
+            costDetailsStore{i} = [];
+            killStore{i} = [];
+            rngStore{i} = [];
+        end
+        
+        batchStartIdx = numConfigs + 1;
+        
+        if separation(numConfigs) > mcSettings.convergenceDelta
+            fprintf('Monte Carlo Simulation converged!\n');
+            break
+        end
     end
 end
 
-% 6. BEST CONFIGURATION
+% 7. FINAL SUMMARY (BEST CONFIGURATION)
 validCandidates = find(ReliabilityScore(1:numConfigs) >= mcSettings.reliabilityThresh);
 if isempty(validCandidates)
     fprintf('\nWARNING: Target Reliability NOT Met. Selecting best available.\n');
@@ -323,56 +385,12 @@ else
     fprintf('Reliability: %.1f%% | Avg Cost: $%.2f\n', ReliabilityScore(bestID), minCost);
 end
 
-
-%% SAVING DATA
-% ------------
-
-SimResults = struct();
-
-% Metadata
-SimResults.Metadata = struct(...
-    'Timestamp', datestr(now), ...
-    'MapBounds', mapBounds, ...
-    'NumAdversaries', advConfig.count, ...
-    'NumSensors', sensConfig.count, ...
-    'NumEffectors', effConfig.totalEffectors, ...
-    'CostConfig', costConfig, ...
-    'ReliabilityThreshold', mcSettings.reliabilityThresh, ...
-    'SensorParams', sensConfig.params, ...
-    'EffectorRange', effConfig.range, ...
-    'MCSettings', mcSettings, ... 
-    'advConfig', advConfig, ...
-    'weaponConfig', weaponConfig ...
-);
-
-SimResults.MapData = mapObj; 
-SimResults.Asset = asset; 
-SimResults.Sensors = sensors;
-
-% configuration results
-SimResults.Configs = struct();
-for i = 1:numConfigs
-    SimResults.Configs(i).ID = i;
-    SimResults.Configs(i).Effectors = configStore{i};
-    SimResults.Configs(i).CostMean = CostperCombo(i);
-    SimResults.Configs(i).Reliability = ReliabilityScore(i);
-    SimResults.Configs(i).LCB = LCB(i);
-    SimResults.Configs(i).UCB = UCB(i);
-    SimResults.Configs(i).KillLocations = killStore{i};
-    
-    % trial settings
-    SimResults.Configs(i).Trials = struct();
-    for t = 1:mcSettings.testsPerConfig
-        SimResults.Configs(i).Trials(t).rngState = runRNGStates{t};
-        SimResults.Configs(i).Trials(t).Starts = scenarioStore{i}{t};
-        SimResults.Configs(i).Trials(t).Paths = pathStore{i}{t};
-        SimResults.Configs(i).Trials(t).Cost = costDetailsStore{i}(t);
-    end
-end
-
-SimResults.BestConfigID = bestID;
-SimResults.NumConfigsRun = numConfigs;
-
-fileName = sprintf('SimData_%s.mat', datestr(now, 'yyyymmdd_HHMMSS'));
-save(fileName, 'SimResults');
-fprintf('\nData saved successfully to: %s\n', fileName);
+% Save a tiny summary file with the overall stats
+SummaryData.BestID = bestID;
+SummaryData.CostperCombo = CostperCombo(1:numConfigs);
+SummaryData.ReliabilityScore = ReliabilityScore(1:numConfigs);
+SummaryData.NumConfigsRun = numConfigs;
+SummaryData.Metadata = SimResults.Metadata; % Keep metadata from last batch
+summaryFileName = sprintf('SimData_Summary_%s.mat', datestr(now, 'yyyymmdd_HHMMSS'));
+save(summaryFileName, 'SummaryData');
+fprintf('Summary data saved to: %s\n', summaryFileName);

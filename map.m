@@ -49,7 +49,9 @@ classdef map < handle
                     end
             end
             obj.terrain.X = X; obj.terrain.Y = Y; obj.terrain.Z = Z;
-            obj.terrainProxy = griddedInterpolant({y_vec, x_vec}, Z', 'linear', 'nearest');
+            
+            % FIXED: Swapped grid vectors to match transposed Z
+            obj.terrainProxy = griddedInterpolant({x_vec, y_vec}, Z', 'linear', 'nearest');
         end
 
         function z = getElevation(obj, x, y)

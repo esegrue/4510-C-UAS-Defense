@@ -19,8 +19,7 @@ classdef simulator < handle
         effectors3D 
         occMap
 
-        % --- WEAPON & PHYSICS PROPERTIES ---
-        weaponMode
+        % --- PHYSICS PROPERTIES ---
         directEnergyDwellTime
         kineticProjectileSpeed
         kineticShotsPerVolley
@@ -53,7 +52,6 @@ classdef simulator < handle
                 options.costConfig = struct('effector', 100, 'asset', 2000, 'leak', 250)
                 
                 % Weapon Model Options
-                options.weaponMode (1, 1) string = "LEGACY"
                 options.directEnergyDwellTime (1, 1) double = 0.75
                 options.kineticProjectileSpeed (1, 1) double = 30
                 options.kineticShotsPerVolley (1, 1) double = 1
@@ -71,8 +69,6 @@ classdef simulator < handle
             obj.costConfig = options.costConfig;
 
             % Apply Weapon Configs
-            obj.weaponMode = upper(string(options.weaponMode));
-            if obj.weaponMode == "KINECT"; obj.weaponMode = "KINETIC"; end
             obj.directEnergyDwellTime = max(0, options.directEnergyDwellTime);
             obj.kineticProjectileSpeed = max(eps, options.kineticProjectileSpeed);
             obj.kineticShotsPerVolley = max(1, round(options.kineticShotsPerVolley));
@@ -145,6 +141,12 @@ classdef simulator < handle
             hasEffectors = ~isempty(obj.effectors3D);
             if hasEffectors
                 effRanges = [obj.effectors.range]';
+                effWeaponModes = string({obj.effectors.weaponMode})';
+                legacyMask = (effWeaponModes == "LEGACY");
+                deMask = (effWeaponModes == "DIRECT_ENERGY");
+                kineticMask = (effWeaponModes == "KINETIC");
+            else
+                legacyMask = []; deMask = []; kineticMask = [];
             end
             
             hasAsset = ~isempty(obj.asset);
@@ -176,7 +178,7 @@ classdef simulator < handle
                 end
             end
 
-            while ~simComplete
+            while ~simComplete && tick_count < 10000
                 simComplete = true; 
                 tick_count = tick_count + 1;
                 obj.tick = tick_count;
@@ -259,47 +261,51 @@ classdef simulator < handle
 
                     eventEffector = false;
                     
-                    % Determine Effector Hit based on Weapon Mode
+                    % Determine Effector Hit based on individual Weapon Modes
                     if uasTracked(i) && hasEffectors
-                        switch obj.weaponMode
-                            case "LEGACY"
-                                effLocs = obj.effectors3D;
-                                d_eff = sqrt(sum((effLocs(:, 1:2) - pos(1:2)).^2, 2));
-                                losOK = false(size(d_eff));
-                                for ee = 1:numel(d_eff)
-                                    if all(isfinite(effLocs(ee, :)))
-                                        losOK(ee) = obj.hasLineOfSight_(effLocs(ee, :), pos(1:3), simulator.losClearance_());
-                                    end
+                        
+                        % 1. Check LEGACY weapons
+                        if any(legacyMask)
+                            effLocs = obj.effectors3D(legacyMask, :);
+                            rgs = effRanges(legacyMask);
+                            d_eff = sqrt(sum((effLocs(:, 1:2) - pos(1:2)).^2, 2));
+                            losOK = false(size(d_eff));
+                            for ee = 1:numel(d_eff)
+                                if all(isfinite(effLocs(ee, :)))
+                                    losOK(ee) = obj.hasLineOfSight_(effLocs(ee, :), pos(1:3), simulator.losClearance_());
                                 end
-                                if any((d_eff <= effRanges) & losOK)
-                                    eventEffector = true;
-                                end
-                                
-                            case "DIRECT_ENERGY"
-                                d_eff = sqrt(sum((obj.effectors3D(:, 1:2) - pos(1:2)).^2, 2));
-                                inRangeMask = (d_eff <= effRanges);
-                                losMask = false(size(inRangeMask));
-                                for ee = 1:numel(inRangeMask)
-                                    if inRangeMask(ee) && all(isfinite(obj.effectors3D(ee, :)))
-                                        losMask(ee) = obj.hasLineOfSight_(obj.effectors3D(ee, :), pos(1:3), simulator.losClearance_());
-                                    end
-                                end
-                                if any(inRangeMask & losMask)
-                                    obj.directEnergyTrackTime(i) = obj.directEnergyTrackTime(i) + dt_local;
-                                else
-                                    obj.directEnergyTrackTime(i) = 0;
-                                end
-                                if obj.directEnergyTrackTime(i) >= obj.directEnergyDwellTime
-                                    eventEffector = true;
-                                end
-                            case "KINETIC"
-                                % Handled outside the UAS loop, but reset direct energy just in case
-                                obj.directEnergyTrackTime(i) = 0;
+                            end
+                            if any((d_eff <= rgs) & losOK)
+                                eventEffector = true;
+                            end
                         end
-                    else
-                        if obj.weaponMode == "DIRECT_ENERGY"
+                        
+                        % 2. Check DIRECT_ENERGY weapons
+                        if any(deMask) && ~eventEffector
+                            effLocs = obj.effectors3D(deMask, :);
+                            rgs = effRanges(deMask);
+                            d_eff = sqrt(sum((effLocs(:, 1:2) - pos(1:2)).^2, 2));
+                            inRangeMask = (d_eff <= rgs);
+                            losMask = false(size(inRangeMask));
+                            for ee = 1:numel(inRangeMask)
+                                if inRangeMask(ee) && all(isfinite(effLocs(ee, :)))
+                                    losMask(ee) = obj.hasLineOfSight_(effLocs(ee, :), pos(1:3), simulator.losClearance_());
+                                end
+                            end
+                            if any(inRangeMask & losMask)
+                                obj.directEnergyTrackTime(i) = obj.directEnergyTrackTime(i) + dt_local;
+                            else
+                                obj.directEnergyTrackTime(i) = 0;
+                            end
+                            if obj.directEnergyTrackTime(i) >= obj.directEnergyDwellTime
+                                eventEffector = true;
+                            end
+                        elseif ~any(deMask) || eventEffector
                             obj.directEnergyTrackTime(i) = 0;
                         end
+
+                    else
+                        obj.directEnergyTrackTime(i) = 0;
                     end
                     
                     eventAsset = false;
@@ -340,7 +346,7 @@ classdef simulator < handle
                 end
                 
                 % 3.5. HANDLE KINETIC PROJECTILES
-                if obj.weaponMode == "KINETIC" && hasEffectors
+                if hasEffectors && any(kineticMask)
                     if obj.kineticUseFermiModel
                         obj.launchKineticFermiShots_(currentTime, uas_active, uasTracked);
                         [uas_active, killedIdx, killedPos] = obj.stepPendingKineticHits_(currentTime, uas_active);
@@ -542,8 +548,12 @@ classdef simulator < handle
             if isempty(obj.effectors) || isempty(obj.UAS); return; end
 
             for e = 1:numel(obj.effectors)
+                if obj.effectors(e).weaponMode ~= "KINETIC"
+                    continue;
+                end
+                
                 if (currentTime - obj.effectorLastFireTime(e)) < obj.kineticRefireTime
-                    continue
+                    continue;
                 end
 
                 effLoc = obj.effectors(e).location(1:2);
@@ -619,8 +629,12 @@ classdef simulator < handle
             if isempty(obj.effectors) || isempty(obj.UAS); return; end
 
             for e = 1:numel(obj.effectors)
+                if obj.effectors(e).weaponMode ~= "KINETIC"
+                    continue;
+                end
+                
                 if (currentTime - obj.effectorLastFireTime(e)) < obj.kineticRefireTime
-                    continue
+                    continue;
                 end
 
                 effLoc = obj.effectors(e).location(1:2);
