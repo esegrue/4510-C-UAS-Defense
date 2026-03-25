@@ -233,7 +233,7 @@ grid off; hold off;
 
 
 %% SCENARIO RELIABILITY DISTRIBUTION
-% ---------------------------
+% ----------------------------------
 
 figure('Name', 'Reliability Distribution', 'Position', [100 100 600 400]);
 hold on; grid on;
@@ -246,6 +246,75 @@ xline(costConfig.leak, 'k--', 'LineWidth', 1.5, 'Label', 'Leak');
 xline(costConfig.effector * SimResults.Metadata.NumAdversaries, 'b--', 'LineWidth', 1.5, 'Label', 'Ideal');
 title(sprintf('Best Config (#%d) Cost Distribution', bestID));
 xlabel('Scenario Cost ($)'); ylabel('Frequency');
+
+
+%% MONTE CARLO TRIAL CONVERGENCE
+% ------------------------------
+
+figure('Name', 'Trial Convergence Analysis', 'Position', [200 200 700 450]);
+hold on; grid on; box on;
+
+% Extract trial data for the best configuration
+bestTrials = SimResults.Configs(bestID).Trials;
+N_tests = length(bestTrials);
+trialCosts = [bestTrials.Cost];
+assetCost = costConfig.asset;
+
+% Preallocate cumulative tracking arrays
+cumMean = zeros(1, N_tests);
+cumLCB = zeros(1, N_tests);
+cumUCB = zeros(1, N_tests);
+cumReliability = zeros(1, N_tests);
+
+% Calculate cumulative stats trial-by-trial
+alpha = SimResults.Metadata.MCSettings.confidenceAlpha;
+failures = 0;
+
+for n = 1:N_tests
+    currentCosts = trialCosts(1:n);
+    cumMean(n) = mean(currentCosts);
+    
+    if currentCosts(end) >= assetCost
+        failures = failures + 1;
+    end
+    cumReliability(n) = 100 * (1 - (failures / n));
+    
+    if n > 1
+        currStd = std(currentCosts);
+        currSE = currStd / sqrt(n);
+        tcrit = tinv(1 - alpha/2, n - 1);
+        cumLCB(n) = cumMean(n) - tcrit * currSE;
+        cumUCB(n) = cumMean(n) + tcrit * currSE;
+    else
+        cumLCB(n) = cumMean(n);
+        cumUCB(n) = cumMean(n);
+    end
+end
+
+% Plot 1: Cost Bounds (Left Y-Axis)
+yyaxis left
+% Create a shaded region for the confidence interval
+x_fill = [1:N_tests, fliplr(1:N_tests)];
+y_fill = [cumLCB, fliplr(cumUCB)];
+fill(x_fill, y_fill, 'b', 'FaceAlpha', 0.1, 'EdgeColor', 'none', 'DisplayName', '90% Confidence Interval');
+
+plot(1:N_tests, cumMean, 'b-', 'LineWidth', 2, 'DisplayName', 'Rolling Mean Cost');
+ylabel('Cost ($)');
+ylim([min(cumLCB(2:end))*0.9, max(cumUCB(2:end))*1.1]); % Ignore n=1 for scaling
+
+% Plot 2: Reliability (Right Y-Axis)
+yyaxis right
+plot(1:N_tests, cumReliability, 'g-', 'LineWidth', 1.5, 'DisplayName', 'Rolling Reliability');
+yline(SimResults.Metadata.ReliabilityThreshold, 'r--', 'LineWidth', 1.5, 'DisplayName', 'Threshold');
+ylabel('Reliability (%)');
+ylim([0 100]);
+
+% Formatting
+title(sprintf('Intra-Configuration Convergence (Config #%d)', bestID));
+xlabel('Number of Monte Carlo Trials');
+xlim([1 N_tests]);
+legend('Location', 'best');
+hold off;
 
 
 %% CONVERGENCE SEPARATION ANALYSIS
@@ -318,8 +387,8 @@ wFermi = wC.kineticUseFermiModel;
 for k = 1:numReplays
 
     % obtaining replay seed and inputs
-    rngState = trialsToReplay(k).rngState;
-    rng(rngState);
+    simSeed = trialsToReplay(k).Seed;
+    rng(simSeed, 'twister');
 
     replayStartPos = trialsToReplay(k).Starts;
     replayPaths = trialsToReplay(k).Paths;

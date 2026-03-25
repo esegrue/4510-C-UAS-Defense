@@ -3,32 +3,38 @@ clear; clc; close all;
 %%  USER CONFIGURATION
 %  -------------------
 % OPTIMIZATION SETTINGS
-mcSettings.maxConfigs = 5; % max number of effector configs to test
-mcSettings.testsPerConfig = 5; %  trials per configuration
-mcSettings.batchSize = 2; % Save to a new file every N configurations and clear RAM
-mcSettings.convergenceDelta = 100; % stop if separation > delta
-mcSettings.confidenceAlpha = 0.1; % Student's t-test alpha (0.1 = 90% conf)
-mcSettings.reliabilityThresh = 90; % minimum reliability (%) to be valid
+mcSettings.maxConfigs = 5; 
+mcSettings.batchSize = 2; 
+mcSettings.searchPatience = 2; % number of iterations without beating rival
+mcSettings.minSeparation = 50; % minimum separation
+mcSettings.confidenceAlpha = 0.1; % confidence in average cost margin (1-alpha)
+mcSettings.reliabilityThresh = 90; % percent of successful tests
+
+% ADAPTIVE SAMPLING SETTINGS
+mcSettings.minTests = 5;         
+mcSettings.maxTests = 50;         
+mcSettings.testChunkSize = 5; 
+mcSettings.targetCIWidth = 100; 
 
 % MAP SETTINGS
-mapConfig.L = 100; % map Length (units)
-mapConfig.W = 100; % map Width (units)
+mapConfig.L = 100; 
+mapConfig.W = 100; 
 mapConfig.pathBankFile = "adversary_paths_bank.mat";
 
 % ASSET LOCATION
-assetConfig.location = [30, 60]; % [X, Y] location of the asset
+assetConfig.location = [30, 60]; 
 
 % EFFECTOR SETTINGS
-effConfig.numStatic = 3; % number of static point-defense effectors
-effConfig.numMobile = 0; % number of mobile interceptor effectors
-effConfig.mobileSpeed = 12; % speed of mobile effectors (units/s)
-effConfig.range = 20; % interception radius (units)
+effConfig.numStatic = 3; 
+effConfig.numMobile = 0; 
+effConfig.mobileSpeed = 12; 
+effConfig.range = 20; 
 effConfig.posBankFile = "effector_posn_bank.mat";
 
 % WEAPON SETTINGS (Heterogeneous Loadouts)
-weaponConfig.numLegacy = 0;       % Count of instant-kill effectors
-weaponConfig.numDirectEnergy = 1; % Count of laser effectors
-weaponConfig.numKinetic = 2;      % Count of projectile effectors
+weaponConfig.numLegacy = 0;       
+weaponConfig.numDirectEnergy = 1; 
+weaponConfig.numKinetic = 2;      
 weaponConfig.directEnergyDwellTime = 0.75;
 weaponConfig.kineticProjectileSpeed = 30;
 weaponConfig.kineticShotsPerVolley = 3;
@@ -38,46 +44,43 @@ weaponConfig.projectileHitTolerance = 1.0;
 weaponConfig.kineticUseFermiModel = true; 
 
 % ADVERSARY SETTINGS
-advConfig.count = 3; % number of incoming threats
-advConfig.speed = 15; % UAS Speed (units/s)
-advConfig.turnRadius = 2; % UAS Turn Radius (units)
-advConfig.altitude = 15; % UAS Ingress Altitude (units)
-advConfig.planner = 'HybridAStar'; % path planning algorithm ('linear')
+advConfig.count = 3; 
+advConfig.speed = 15; 
+advConfig.turnRadius = 2; 
+advConfig.altitude = 15; 
+advConfig.planner = 'HybridAStar'; 
 
 % SENSOR SETTINGS
-sensConfig.count = 3; % number of sensors
-sensConfig.locations = [30,85; 8.35,47.5; 51.65,47.5]; % [X1,Y1; Xn,Yn] location of sensors
-sensConfig.range = 20; % detection radius (units)
+sensConfig.count = 3; 
+sensConfig.locations = [30,85; 8.35,47.5; 51.65,47.5]; 
+sensConfig.range = 20; 
 sensConfig.params = struct('d50', sensConfig.range, 'k', 10, 'pings', 3, 'duration', 1.0, 'scanRate', 0.2);
 
 % COST FUNCTION SETTINGS
-costConfig.effector = 100; % cost per effector used
-costConfig.asset = 2000; % cost if asset is destroyed
-costConfig.leak = 250; % cost per adversary not intercepted
+costConfig.effector = 100; 
+costConfig.asset = 2000; 
+costConfig.leak = 250; 
 
 % SIMULATION ENGINE SETTINGS
-simConfig.parallel = false; % run parallelized (no animation) or sequential loop
+simConfig.parallel = false; 
 simConfig.numCores = feature("numcores")/2;
-simConfig.tps = 20; % time steps per second
-simConfig.animateLive = false; % animate? (slows down processing)
+simConfig.tps = 20; 
+simConfig.animateLive = false; 
 
 %% SIMULATION SETUP
 % -----------------
 rng('shuffle')
-% define map
 load big_island_map.mat
 mapObj = elevationMap;
 mapBounds = [0 mapConfig.L 0 mapConfig.W];
 xlims = [0 mapConfig.L]; ylims = [0 mapConfig.W];
 
-% storage arrays
-trialSeeds = randi([1, 2^31-1], mcSettings.maxConfigs, mcSettings.testsPerConfig);
+trialSeeds = randi([1, 2^31-1], mcSettings.maxConfigs, mcSettings.maxTests);
 configStore = cell(mcSettings.maxConfigs, 1);      
 scenarioStore = cell(mcSettings.maxConfigs, 1);
 pathStore = cell(mcSettings.maxConfigs, 1);
 costDetailsStore = cell(mcSettings.maxConfigs, 1); 
 killStore = cell(mcSettings.maxConfigs, 1);
-rngStore = cell(mcSettings.maxConfigs, 1); % Added to properly store RNG states across loops
 
 CostperCombo = nan(mcSettings.maxConfigs, 1);
 ReliabilityScore = nan(mcSettings.maxConfigs, 1); 
@@ -85,7 +88,6 @@ LCB = nan(mcSettings.maxConfigs, 1);
 UCB = nan(mcSettings.maxConfigs, 1); 
 separation = nan(mcSettings.maxConfigs, 1);
 
-% load position and path banks
 if isfile(effConfig.posBankFile)
     load(effConfig.posBankFile, 'effector_posns_bank');
 else
@@ -97,10 +99,8 @@ else
     error('Adversary path bank file not found: %s', mapConfig.pathBankFile);
 end
 
-% define asset
 asset = struct('location', assetConfig.location);
 
-% define sensor
 sensorStructTemplate = struct('location', [0,0], 'range', sensConfig.range, 'params', sensConfig.params); 
 sensors = repmat(sensorStructTemplate, sensConfig.count, 1);
 for i = 1:sensConfig.count
@@ -111,7 +111,6 @@ for i = 1:sensConfig.count
     end
 end
 
-% define effector template & validate weapon counts
 effConfig.totalEffectors = effConfig.numStatic + effConfig.numMobile;
 weaponTypes = [repmat("LEGACY", 1, weaponConfig.numLegacy), ...
                repmat("DIRECT_ENERGY", 1, weaponConfig.numDirectEnergy), ...
@@ -127,22 +126,21 @@ effectorStructTemplate = struct('location', [0,0], 'range', effConfig.range, ...
 %% MONTE CARLO SIMULATION
 % -----------------------
 numConfigs = 0;
-batchTimestamp = ''; 
-BatchConfigs = []; 
-
-fprintf('Starting Monte Carlo Simulation...\n');
+batchStartIdx = 1; 
+configsSinceNewBest = 0;
+bestConfigTracker = 0;
+fprintf('Starting Adaptive Monte Carlo Simulation...\n');
 
 while numConfigs < mcSettings.maxConfigs
     numConfigs = numConfigs + 1;
     
-    % 1. GENERATE EFFECTORS
     randIndices = randperm(size(effector_posns_bank, 1), effConfig.totalEffectors);
     effPos = effector_posns_bank(randIndices, :);
     
     currentEffectors = repmat(effectorStructTemplate, effConfig.totalEffectors, 1);
     for e = 1:effConfig.totalEffectors
         currentEffectors(e).location = effPos(e, :);
-        currentEffectors(e).weaponMode = weaponTypes(e); % Individually assign weapon
+        currentEffectors(e).weaponMode = weaponTypes(e); 
         if e <= effConfig.numStatic
             currentEffectors(e).mode = "STATIC";
             currentEffectors(e).speed = 0;
@@ -154,117 +152,113 @@ while numConfigs < mcSettings.maxConfigs
     configStore{numConfigs} = currentEffectors;
     
     % 2. INITIALIZE STORAGE
-    runCosts = zeros(mcSettings.testsPerConfig, 1); 
-    runStarts = cell(mcSettings.testsPerConfig, 1);
-    runPaths = cell(mcSettings.testsPerConfig, 1);
-    runFailures = zeros(mcSettings.testsPerConfig, 1);
-    runKills = cell(mcSettings.testsPerConfig, 1);
-    runRNGStates = cell(mcSettings.testsPerConfig, 1);
+    runCosts = zeros(mcSettings.maxTests, 1); 
+    runStarts = cell(mcSettings.maxTests, 1);
+    runPaths = cell(mcSettings.maxTests, 1);
+    runFailures = zeros(mcSettings.maxTests, 1);
+    runKills = cell(mcSettings.maxTests, 1);
     
-    % 3. RUN TESTS
-    if simConfig.parallel
-        parpool(simConfig.numCores)
-        parfor j = 1:mcSettings.testsPerConfig
-            rng(trialSeeds(numConfigs, j), 'twister');
-            uasArray = UAS.empty(0, advConfig.count);
-            pathIdxs = zeros(advConfig.count, 1);
-            starts = zeros(advConfig.count, 3);
-            
-            for k = 1:advConfig.count
-                pIdx = randi(length(adversary_paths_bank));
-                pathIdxs(k) = pIdx;
-                path = adversary_paths_bank{1,1,pIdx};
+    % 3. RUN ADAPTIVE TESTS (CHUNKING)
+    testsCompleted = 0;
+    ciConverged = false;
+    
+    while testsCompleted < mcSettings.maxTests && ~ciConverged
+        if testsCompleted == 0
+            testsThisRound = mcSettings.minTests;
+        else
+            testsThisRound = min(mcSettings.testChunkSize, mcSettings.maxTests - testsCompleted);
+        end
+        
+        chunkCosts = zeros(testsThisRound, 1);
+        chunkStarts = cell(testsThisRound, 1);
+        chunkPaths = cell(testsThisRound, 1);
+        chunkFailures = zeros(testsThisRound, 1);
+        chunkKills = cell(testsThisRound, 1);
+        
+        if simConfig.parallel
+            if isempty(gcp('nocreate')); parpool(simConfig.numCores); end
+            parfor j = 1:testsThisRound
+                trialIdx = testsCompleted + j;
+                rng(trialSeeds(numConfigs, trialIdx), 'twister');
                 
-                startX = path(1, 1);
-                startY = path(1, 2);
-                
-                startZ = advConfig.altitude;
-                groundElevation = mapObj.getElevation(startX, startY);
-                while groundElevation >= startZ
-                    startZ = startZ + 1;
+                uasArray = UAS.empty(0, advConfig.count); pathIdxs = zeros(advConfig.count, 1); starts = zeros(advConfig.count, 3);
+                for k = 1:advConfig.count
+                    pIdx = randi(length(adversary_paths_bank)); pathIdxs(k) = pIdx; path = adversary_paths_bank{1,1,pIdx};
+                    startX = path(1, 1); startY = path(1, 2); startZ = advConfig.altitude;
+                    groundElevation = mapObj.getElevation(startX, startY);
+                    while groundElevation >= startZ; startZ = startZ + 1; end
+                    starts(k, :) = [startX, startY, startZ];
+                    uasArray(k) = UAS(advConfig.speed, starts(k,:), asset.location, advConfig.planner, startZ, advConfig.turnRadius, "adversary_path", path);
                 end
                 
-                starts(k, :) = [startX, startY, startZ];
+                sim = simulator(mapObj, uasArray, currentEffectors, sensors, asset, 'tps', simConfig.tps, 'animate', false, 'resetGraphics', false, 'costConfig', costConfig, ...
+                    'directEnergyDwellTime', weaponConfig.directEnergyDwellTime, 'kineticProjectileSpeed', weaponConfig.kineticProjectileSpeed, ...
+                    'kineticShotsPerVolley', weaponConfig.kineticShotsPerVolley, 'kineticHitProbability', weaponConfig.kineticHitProbability, ...
+                    'kineticRefireTime', weaponConfig.kineticRefireTime, 'projectileHitTolerance', weaponConfig.projectileHitTolerance, 'kineticUseFermiModel', weaponConfig.kineticUseFermiModel);
+                runResults = sim.runSim();
                 
-                uasArray(k) = UAS(advConfig.speed, starts(k,:), asset.location, advConfig.planner, startZ, advConfig.turnRadius, "adversary_path", path);
+                chunkCosts(j) = runResults.cost; 
+                chunkStarts{j} = starts; 
+                chunkPaths{j} = pathIdxs;
+                if isfield(runResults, 'UASkillLocations') && ~isempty(runResults.UASkillLocations); chunkKills{j} = runResults.UASkillLocations; end
+                if runResults.cost >= costConfig.asset; chunkFailures(j) = 1; end
             end
-            
-            rngState = rng;
-            sim = simulator(mapObj, uasArray, currentEffectors, sensors, asset, 'tps', simConfig.tps, 'animate', false, 'resetGraphics', false, 'costConfig', costConfig, ...
-                'directEnergyDwellTime', weaponConfig.directEnergyDwellTime, ...
-                'kineticProjectileSpeed', weaponConfig.kineticProjectileSpeed, ...
-                'kineticShotsPerVolley', weaponConfig.kineticShotsPerVolley, ...
-                'kineticHitProbability', weaponConfig.kineticHitProbability, ...
-                'kineticRefireTime', weaponConfig.kineticRefireTime, ...
-                'projectileHitTolerance', weaponConfig.projectileHitTolerance, ...
-                'kineticUseFermiModel', weaponConfig.kineticUseFermiModel);
-            runResults = sim.runSim();
-            runRNGStates{j} = rngState;
-            runCosts(j) = runResults.cost;
-            runStarts{j} = starts;
-            runPaths{j} = pathIdxs;
-            if isfield(runResults, 'UASkillLocations') && ~isempty(runResults.UASkillLocations)
-                runKills{j} = runResults.UASkillLocations;
-            end
-    
-            if runResults.cost >= costConfig.asset
-                runFailures(j) = 1;
+        else
+            for j = 1:testsThisRound
+                trialIdx = testsCompleted + j;
+                rng(trialSeeds(numConfigs, trialIdx), 'twister');
+        
+                uasArray = UAS.empty(0, advConfig.count); pathIdxs = zeros(advConfig.count, 1); starts = zeros(advConfig.count, 3);
+                for k = 1:advConfig.count
+                    pIdx = randi(length(adversary_paths_bank)); pathIdxs(k) = pIdx; path = adversary_paths_bank{1,1,pIdx};
+                    startX = path(1, 1); startY = path(1, 2); startZ = advConfig.altitude;
+                    groundElevation = mapObj.getElevation(startX, startY);
+                    while groundElevation >= startZ; startZ = startZ + 1; end
+                    starts(k, :) = [startX, startY, startZ];
+                    uasArray(k) = UAS(advConfig.speed, starts(k,:), asset.location, advConfig.planner, startZ, advConfig.turnRadius, "adversary_path", path);
+                end
+                
+                sim = simulator(mapObj, uasArray, currentEffectors, sensors, asset, 'tps', simConfig.tps, 'animate', simConfig.animateLive, 'resetGraphics', true, 'costConfig', costConfig, ...
+                    'directEnergyDwellTime', weaponConfig.directEnergyDwellTime, 'kineticProjectileSpeed', weaponConfig.kineticProjectileSpeed, ...
+                    'kineticShotsPerVolley', weaponConfig.kineticShotsPerVolley, 'kineticHitProbability', weaponConfig.kineticHitProbability, ...
+                    'kineticRefireTime', weaponConfig.kineticRefireTime, 'projectileHitTolerance', weaponConfig.projectileHitTolerance, 'kineticUseFermiModel', weaponConfig.kineticUseFermiModel);
+                runResults = sim.runSim();
+                
+                chunkCosts(j) = runResults.cost; 
+                chunkStarts{j} = starts; 
+                chunkPaths{j} = pathIdxs;
+                if isfield(runResults, 'UASkillLocations') && ~isempty(runResults.UASkillLocations); chunkKills{j} = runResults.UASkillLocations; end
+                if runResults.cost >= costConfig.asset; chunkFailures(j) = 1; end
             end
         end
-    else
-        for j = 1:mcSettings.testsPerConfig
-            rng(trialSeeds(numConfigs, j), 'twister');
-    
-            uasArray = UAS.empty(0, advConfig.count);
-            pathIdxs = zeros(advConfig.count, 1);
-            starts = zeros(advConfig.count, 3);
+        
+        idxRange = (testsCompleted + 1) : (testsCompleted + testsThisRound);
+        runCosts(idxRange) = chunkCosts;
+        runStarts(idxRange) = chunkStarts;
+        runPaths(idxRange) = chunkPaths;
+        runFailures(idxRange) = chunkFailures;
+        runKills(idxRange) = chunkKills;
+        
+        testsCompleted = testsCompleted + testsThisRound;
+        
+        if testsCompleted > 1
+            currSE = std(runCosts(1:testsCompleted)) / sqrt(testsCompleted);
+            tcrit = tinv(1 - mcSettings.confidenceAlpha/2, testsCompleted - 1);
+            ciWidth = 2 * tcrit * currSE;
             
-            for k = 1:advConfig.count
-                pIdx = randi(length(adversary_paths_bank));
-                pathIdxs(k) = pIdx;
-                path = adversary_paths_bank{1,1,pIdx};
-                
-                startX = path(1, 1);
-                startY = path(1, 2);
-                
-                startZ = advConfig.altitude;
-                groundElevation = mapObj.getElevation(startX, startY);
-                while groundElevation >= startZ
-                    startZ = startZ + 1;
-                end
-                
-                starts(k, :) = [startX, startY, startZ];
-                
-                uasArray(k) = UAS(advConfig.speed, starts(k,:), asset.location, advConfig.planner, startZ, advConfig.turnRadius, "adversary_path", path);
-            end
-            rngState = rng;
-            
-            sim = simulator(mapObj, uasArray, currentEffectors, sensors, asset, 'tps', simConfig.tps, 'animate', simConfig.animateLive, 'resetGraphics', true, 'costConfig', costConfig, ...
-                'directEnergyDwellTime', weaponConfig.directEnergyDwellTime, ...
-                'kineticProjectileSpeed', weaponConfig.kineticProjectileSpeed, ...
-                'kineticShotsPerVolley', weaponConfig.kineticShotsPerVolley, ...
-                'kineticHitProbability', weaponConfig.kineticHitProbability, ...
-                'kineticRefireTime', weaponConfig.kineticRefireTime, ...
-                'projectileHitTolerance', weaponConfig.projectileHitTolerance, ...
-                'kineticUseFermiModel', weaponConfig.kineticUseFermiModel);
-            runResults = sim.runSim();
-            
-            runRNGStates{j} = rngState;
-            runCosts(j) = runResults.cost; 
-            runStarts{j} = starts;
-            runPaths{j} = pathIdxs;
-            
-            if isfield(runResults, 'UASkillLocations') && ~isempty(runResults.UASkillLocations)
-                runKills{j} = runResults.UASkillLocations;
-            end
-    
-            if runResults.cost >= costConfig.asset
-                runFailures(j) = 1;
+            if ciWidth <= mcSettings.targetCIWidth
+                ciConverged = true;
             end
         end
     end
-    currentConfigKills = vertcat(runKills{:});
-    runFailures = sum(runFailures);
+    
+    runCosts = runCosts(1:testsCompleted);
+    runStarts = runStarts(1:testsCompleted);
+    runPaths = runPaths(1:testsCompleted);
+    runFailures = runFailures(1:testsCompleted);
+    runKills = runKills(1:testsCompleted);
+    
+    currentConfigKills = vertcat(runKills{:}); runFailures = sum(runFailures);
     
     % 4. STORE CONFIGURATION RESULTS
     scenarioStore{numConfigs} = runStarts;
@@ -272,16 +266,15 @@ while numConfigs < mcSettings.maxConfigs
     costDetailsStore{numConfigs} = runCosts;
     CostperCombo(numConfigs) = mean(runCosts);
     killStore{numConfigs} = currentConfigKills;
-    rngStore{numConfigs} = runRNGStates; 
-    
+
     % 5. CONVERGENCE
-    currentReliability = 100 * (1 - (runFailures / mcSettings.testsPerConfig));
+    currentReliability = 100 * (1 - (runFailures / testsCompleted));
     ReliabilityScore(numConfigs) = currentReliability;
     
-    if mcSettings.testsPerConfig > 1
+    if testsCompleted > 1
         SD = std(runCosts, 0); 
-        SE = SD/sqrt(mcSettings.testsPerConfig); 
-        tcrit = tinv(1 - mcSettings.confidenceAlpha/2, mcSettings.testsPerConfig - 1);
+        SE = SD/sqrt(testsCompleted); 
+        tcrit = tinv(1 - mcSettings.confidenceAlpha/2, testsCompleted - 1);
         LCB(numConfigs) = CostperCombo(numConfigs) - tcrit*SE;
         UCB(numConfigs) = CostperCombo(numConfigs) + tcrit*SE;
     else
@@ -293,7 +286,7 @@ while numConfigs < mcSettings.maxConfigs
     
     if isempty(validMask) || length(validMask) == 1
         separation(numConfigs) = -inf;
-        fprintf('Iter %d: No comparison (Reliability: %.1f%%)\n', numConfigs, currentReliability);
+        fprintf('Iter %d: %d tests | No comparison (Rel: %.1f%%)\n', numConfigs, testsCompleted, currentReliability);
     else
         validCosts = CostperCombo(validMask);
         [~, bestIdxInValid] = min(validCosts);
@@ -301,91 +294,93 @@ while numConfigs < mcSettings.maxConfigs
         
         rivalsMask = validMask(validMask ~= bestGlobalID);
         separation(numConfigs) = min(LCB(rivalsMask)) - UCB(bestGlobalID);
-        fprintf('Iter %d: Valid Best #%d ($%.0f) vs Rival ($%.0f) | Sep: %.2f\n', ...
-            numConfigs, bestGlobalID, CostperCombo(bestGlobalID), ...
+        
+        if bestGlobalID ~= bestConfigTracker
+            bestConfigTracker = bestGlobalID;
+            configsSinceNewBest = 0;
+        else
+            configsSinceNewBest = configsSinceNewBest + 1;
+        end
+        
+        fprintf('Iter %d: %d tests | Valid Best #%d ($%.0f) vs Rival ($%.0f) | Sep: %.2f\n', ...
+            numConfigs, testsCompleted, bestGlobalID, CostperCombo(bestGlobalID), ...
             min(CostperCombo(rivalsMask)), separation(numConfigs));
     end
-    
-    % 6. BATCH SAVING, ROLLING SAVE, & RAM FLUSH
-    idxInBatch = mod(numConfigs - 1, mcSettings.batchSize) + 1;
-    startIdx = numConfigs - idxInBatch + 1;
-    endIdx = min(startIdx + mcSettings.batchSize - 1, mcSettings.maxConfigs);
 
-    savePrefix = 'SimData';
-    
-    Metadata = struct('Timestamp', datestr(now), 'MapBounds', mapBounds, ...
-        'NumAdversaries', advConfig.count, 'NumSensors', sensConfig.count, ...
-        'NumEffectors', effConfig.totalEffectors, 'CostConfig', costConfig, ...
-        'ReliabilityThreshold', mcSettings.reliabilityThresh, ...
-        'SensorParams', sensConfig.params, 'EffectorRange', effConfig.range, ...
-        'MCSettings', mcSettings, 'advConfig', advConfig, 'weaponConfig', weaponConfig);
-    
-    if idxInBatch == 1
-        batchTimestamp = datestr(now, 'yyyymmdd_HHMMSS');
-    end
-    
-    fileName = sprintf('%s_Batch_%dto%d_%s.mat', savePrefix, startIdx, endIdx, batchTimestamp);
+    % 6. INCREMENTAL BATCH SAVING, ROLLING SUMMARY, & RAM FLUSH
+    if mod(numConfigs, mcSettings.batchSize) == 0 || numConfigs == mcSettings.maxConfigs || (configsSinceNewBest >= mcSettings.searchPatience && separation(numConfigs) > mcSettings.minSeparation)
+        fprintf('Saving Batch (Configs %d to %d) to disk...\n', batchStartIdx, numConfigs);
+        
+        SimResults = struct();
+        SimResults.Metadata = struct(...
+            'Timestamp', datestr(now), 'MapBounds', mapBounds, ...
+            'NumAdversaries', advConfig.count, 'NumSensors', sensConfig.count, ...
+            'NumEffectors', effConfig.totalEffectors, 'CostConfig', costConfig, ...
+            'ReliabilityThreshold', mcSettings.reliabilityThresh, ...
+            'SensorParams', sensConfig.params, 'EffectorRange', effConfig.range, ...
+            'MCSettings', mcSettings, 'advConfig', advConfig, 'weaponConfig', weaponConfig);
 
-    currentConfigData = struct();
-    currentConfigData.ID = numConfigs;
-    currentConfigData.Effectors = configStore{numConfigs};
-    currentConfigData.CostMean = CostperCombo(numConfigs);
-    currentConfigData.Reliability = ReliabilityScore(numConfigs);
-    currentConfigData.LCB = LCB(numConfigs);
-    currentConfigData.UCB = UCB(numConfigs);
-    currentConfigData.KillLocations = killStore{numConfigs};
-    currentConfigData.Separation = separation(numConfigs);
-    
-    currentConfigData.Trials = struct();
-    for t = 1:mcSettings.testsPerConfig
-        currentConfigData.Trials(t).rngState = rngStore{numConfigs}{t};
-        currentConfigData.Trials(t).Starts = scenarioStore{numConfigs}{t};
-        currentConfigData.Trials(t).Paths = pathStore{numConfigs}{t};
-        currentConfigData.Trials(t).Cost = costDetailsStore{numConfigs}(t);
-    end
-    
-    if isempty(BatchConfigs)
-        BatchConfigs = currentConfigData;
-    else
-        BatchConfigs(end+1) = currentConfigData;
-    end
-    
-    Configs = BatchConfigs; 
-    MapData = mapObj; AssetData = asset; SensorData = sensors;
-    save(fileName, 'Metadata', 'MapData', 'AssetData', 'SensorData', 'Configs', '-v7.3');
-    
-    validCandidates = find(ReliabilityScore(1:numConfigs) >= mcSettings.reliabilityThresh);
-    if isempty(validCandidates)
-        [~, bestID] = max(ReliabilityScore(1:numConfigs));
-    else
-        [~, minIdx] = min(CostperCombo(validCandidates));
-        bestID = validCandidates(minIdx);
-    end
-    
-    SummaryData = struct();
-    SummaryData.BestID = bestID;
-    SummaryData.CostperCombo = CostperCombo(1:numConfigs);
-    SummaryData.ReliabilityScore = ReliabilityScore(1:numConfigs);
-    SummaryData.SeparationHistory = separation(1:numConfigs); 
-    SummaryData.NumConfigsRun = numConfigs;
-    SummaryData.Metadata = Metadata; 
-    
-    summaryFileName = sprintf('%s_Summary_Latest.mat', savePrefix);
-    save(summaryFileName, 'SummaryData', '-v7.3');
-    
-    configStore{numConfigs} = [];
-    scenarioStore{numConfigs} = [];
-    pathStore{numConfigs} = [];
-    costDetailsStore{numConfigs} = [];
-    killStore{numConfigs} = [];
-    rngStore{numConfigs} = [];
-    
-    if idxInBatch == mcSettings.batchSize || numConfigs == mcSettings.maxConfigs || separation(numConfigs) > mcSettings.convergenceDelta
-        BatchConfigs = [];
-    end
-    
-    if separation(numConfigs) > mcSettings.convergenceDelta
-        fprintf('Monte Carlo Simulation converged!\n');
-        break
+        SimResults.MapData = mapObj; 
+        SimResults.Asset = asset; 
+        SimResults.Sensors = sensors;
+        SimResults.Configs = struct();
+        
+        idx = 1;
+        for i = batchStartIdx:numConfigs
+            SimResults.Configs(idx).ID = i;
+            SimResults.Configs(idx).Effectors = configStore{i};
+            SimResults.Configs(idx).CostMean = CostperCombo(i);
+            SimResults.Configs(idx).Reliability = ReliabilityScore(i);
+            SimResults.Configs(idx).LCB = LCB(i);
+            SimResults.Configs(idx).UCB = UCB(i);
+            SimResults.Configs(idx).KillLocations = killStore{i};
+            SimResults.Configs(idx).Separation = separation(i); 
+            
+            SimResults.Configs(idx).Trials = struct();
+            trialsRun = length(costDetailsStore{i});
+            for t = 1:trialsRun
+                SimResults.Configs(idx).Trials(t).Seed = trialSeeds(i, t); 
+                SimResults.Configs(idx).Trials(t).Starts = scenarioStore{i}{t};
+                SimResults.Configs(idx).Trials(t).Paths = pathStore{i}{t};
+                SimResults.Configs(idx).Trials(t).Cost = costDetailsStore{i}(t);
+            end
+            idx = idx + 1;
+        end
+        
+        fileName = sprintf('SimData_Batch_%dto%d_%s.mat', batchStartIdx, numConfigs, datestr(now, 'yyyymmdd_HHMMSS'));
+        save(fileName, 'SimResults', '-v7.3');
+        
+        validCandidates = find(ReliabilityScore(1:numConfigs) >= mcSettings.reliabilityThresh);
+        if isempty(validCandidates)
+            [~, bestID] = max(ReliabilityScore(1:numConfigs));
+        else
+            [~, minIdx] = min(CostperCombo(validCandidates));
+            bestID = validCandidates(minIdx);
+        end
+
+        SummaryData = struct();
+        SummaryData.BestID = bestID;
+        SummaryData.CostperCombo = CostperCombo(1:numConfigs);
+        SummaryData.ReliabilityScore = ReliabilityScore(1:numConfigs);
+        SummaryData.SeparationHistory = separation(1:numConfigs); 
+        SummaryData.NumConfigsRun = numConfigs;
+        SummaryData.Metadata = SimResults.Metadata; 
+        
+        save('SimData_Summary_Latest.mat', 'SummaryData');
+        
+        for i = batchStartIdx:numConfigs
+            configStore{i} = [];
+            scenarioStore{i} = [];
+            pathStore{i} = [];
+            costDetailsStore{i} = [];
+            killStore{i} = [];
+        end
+        
+        batchStartIdx = numConfigs + 1;
+        
+        if configsSinceNewBest >= mcSettings.searchPatience && separation(numConfigs) > mcSettings.minSeparation
+            fprintf('Monte Carlo Simulation converged!\n');
+            break
+        end
     end
 end
