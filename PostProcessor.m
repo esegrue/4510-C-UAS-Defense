@@ -17,7 +17,7 @@ replayConfig.animMult = 5; % animation speed multiplier
 %% LOAD & STITCH BATCH DATA
 % -------------------------
 disp('Please select all SimData_Batch files from your run...');
-[fileNames, pathName] = uigetfile('SimData_Batch_*.mat', 'Select all Batch files for this run', 'MultiSelect', 'on');
+[fileNames, pathName] = uigetfile('*.mat', 'Select all Batch files for this run', 'MultiSelect', 'on');
 
 if isequal(fileNames,0)
    error('No files selected. Exiting.');
@@ -33,26 +33,50 @@ fprintf('Loading and stitching %d batch files...\n', length(fileNames));
 combinedConfigs = [];
 for i = 1:length(fileNames)
     fullPath = fullfile(pathName, fileNames{i});
-    data = load(fullPath, 'SimResults');
+    data = load(fullPath); % Load all variables in the file
     
-    if i == 1
-        % Extract global data from the first batch
-        mapObj = data.SimResults.MapData;
-        asset = data.SimResults.Asset;
-        sensors = data.SimResults.Sensors;
-        metadata = data.SimResults.Metadata;
-        costConfig = metadata.CostConfig;
+    % AUTODETECT FORMAT: Old (SimResults struct) vs New (Top-level variables)
+    if isfield(data, 'SimResults')
+        % --- OLD FORMAT HANDLING ---
+        if i == 1
+            mapObj = data.SimResults.MapData;
+            asset = data.SimResults.Asset;
+            sensors = data.SimResults.Sensors;
+            metadata = data.SimResults.Metadata;
+            costConfig = metadata.CostConfig;
+        end
+        batchConfigs = data.SimResults.Configs(:)'; % Force row vector for safe concatenation
+        
+    elseif isfield(data, 'Configs')
+        % --- NEW FORMAT HANDLING ---
+        if i == 1
+            mapObj = data.MapData;
+            asset = data.AssetData;
+            sensors = data.SensorData;
+            metadata = data.Metadata;
+            costConfig = metadata.CostConfig;
+        end
+        batchConfigs = data.Configs(:)'; % Force row vector
+        
+        % Filter out any uninitialized empty structs if a batch was interrupted halfway
+        validIdx = arrayfun(@(x) ~isempty(x.ID) && x.ID > 0, batchConfigs);
+        batchConfigs = batchConfigs(validIdx);
+        
+    else
+        warning('Unrecognized data format in file: %s. Skipping.', fileNames{i});
+        continue;
     end
     
     % Append the configurations
-    combinedConfigs = [combinedConfigs, data.SimResults.Configs];
+    combinedConfigs = [combinedConfigs, batchConfigs];
 end
 
 % Sort stitched configurations by their ID to ensure perfect order
 [~, sortIdx] = sort([combinedConfigs.ID]);
 combinedConfigs = combinedConfigs(sortIdx);
 
-% Reconstruct the SimResults structure in memory
+% Reconstruct the standard SimResults structure in memory 
+% (This ensures everything below this point works exactly as it used to)
 SimResults.Configs = combinedConfigs;
 SimResults.MapData = mapObj;
 SimResults.Asset = asset;
@@ -66,6 +90,13 @@ load('adversary_paths_bank.mat', 'adversary_paths_bank');
 % arrays for plotting
 CostperCombo = [SimResults.Configs.CostMean];
 ReliabilityScore = [SimResults.Configs.Reliability];
+
+% Extract Separation history for convergence analysis
+if isfield(SimResults.Configs, 'Separation')
+    SeparationHistory = [SimResults.Configs.Separation];
+else
+    SeparationHistory = nan(1, numConfigs);
+end
 
 % Find the overall Best ID across all batches
 validMask = ReliabilityScore >= metadata.ReliabilityThreshold;
@@ -215,6 +246,39 @@ xline(costConfig.leak, 'k--', 'LineWidth', 1.5, 'Label', 'Leak');
 xline(costConfig.effector * SimResults.Metadata.NumAdversaries, 'b--', 'LineWidth', 1.5, 'Label', 'Ideal');
 title(sprintf('Best Config (#%d) Cost Distribution', bestID));
 xlabel('Scenario Cost ($)'); ylabel('Frequency');
+
+
+%% CONVERGENCE SEPARATION ANALYSIS
+% --------------------------------
+% Plots the separation curve over the configuration iterations
+figure('Name', 'Convergence Analysis', 'Position', [150 150 600 400]);
+hold on; grid on; box on;
+
+if ~all(isnan(SeparationHistory))
+    % Filter out -inf values (initial iterations with no comparison possible)
+    validSepIdx = find(SeparationHistory ~= -inf & ~isnan(SeparationHistory));
+    
+    if ~isempty(validSepIdx)
+        plot(validSepIdx, SeparationHistory(validSepIdx), '-o', 'Color', [0 0.4470 0.7410], 'LineWidth', 1.5, 'MarkerSize', 5, 'DisplayName', 'Separation');
+        
+        % Plot Threshold Line if available in metadata
+        if isfield(metadata, 'MCSettings') && isfield(metadata.MCSettings, 'convergenceDelta')
+            deltaThreshold = metadata.MCSettings.convergenceDelta;
+            yline(deltaThreshold, 'r--', 'LineWidth', 2, 'DisplayName', 'Convergence Threshold');
+        end
+        
+        legend('Location', 'best');
+    else
+        text(0.5, 0.5, 'No valid comparisons found yet', 'Units', 'normalized', 'HorizontalAlignment', 'center');
+    end
+else
+    text(0.5, 0.5, 'Separation data not found in files', 'Units', 'normalized', 'HorizontalAlignment', 'center');
+end
+
+xlabel('Configuration Iteration');
+ylabel('Separation ($)');
+title('Monte Carlo Convergence History');
+hold off;
 
 
 %% REPLAY CONFIGURATION

@@ -127,7 +127,9 @@ effectorStructTemplate = struct('location', [0,0], 'range', effConfig.range, ...
 %% MONTE CARLO SIMULATION
 % -----------------------
 numConfigs = 0;
-batchStartIdx = 1; % Tracks where the current save batch begins
+batchTimestamp = ''; 
+BatchConfigs = []; 
+
 fprintf('Starting Monte Carlo Simulation...\n');
 
 while numConfigs < mcSettings.maxConfigs
@@ -188,7 +190,6 @@ while numConfigs < mcSettings.maxConfigs
             end
             
             rngState = rng;
-            % Removed global weaponMode definition here
             sim = simulator(mapObj, uasArray, currentEffectors, sensors, asset, 'tps', simConfig.tps, 'animate', false, 'resetGraphics', false, 'costConfig', costConfig, ...
                 'directEnergyDwellTime', weaponConfig.directEnergyDwellTime, ...
                 'kineticProjectileSpeed', weaponConfig.kineticProjectileSpeed, ...
@@ -271,13 +272,12 @@ while numConfigs < mcSettings.maxConfigs
     costDetailsStore{numConfigs} = runCosts;
     CostperCombo(numConfigs) = mean(runCosts);
     killStore{numConfigs} = currentConfigKills;
-    rngStore{numConfigs} = runRNGStates; % Save RNG states for replay capability
+    rngStore{numConfigs} = runRNGStates; 
     
     % 5. CONVERGENCE
     currentReliability = 100 * (1 - (runFailures / mcSettings.testsPerConfig));
     ReliabilityScore(numConfigs) = currentReliability;
     
-    % Student's t-distribution
     if mcSettings.testsPerConfig > 1
         SD = std(runCosts, 0); 
         SE = SD/sqrt(mcSettings.testsPerConfig); 
@@ -306,91 +306,86 @@ while numConfigs < mcSettings.maxConfigs
             min(CostperCombo(rivalsMask)), separation(numConfigs));
     end
     
-    % --- 6. BATCH SAVING & RAM FLUSH ---
-    if mod(numConfigs, mcSettings.batchSize) == 0 || numConfigs == mcSettings.maxConfigs || separation(numConfigs) > mcSettings.convergenceDelta
-        fprintf('Saving Batch (Configs %d to %d) to disk and clearing RAM...\n', batchStartIdx, numConfigs);
-        
-        SimResults = struct();
-        SimResults.Metadata = struct(...
-            'Timestamp', datestr(now), ...
-            'MapBounds', mapBounds, ...
-            'NumAdversaries', advConfig.count, ...
-            'NumSensors', sensConfig.count, ...
-            'NumEffectors', effConfig.totalEffectors, ...
-            'CostConfig', costConfig, ...
-            'ReliabilityThreshold', mcSettings.reliabilityThresh, ...
-            'SensorParams', sensConfig.params, ...
-            'EffectorRange', effConfig.range, ...
-            'MCSettings', mcSettings, ... 
-            'advConfig', advConfig, ...
-            'weaponConfig', weaponConfig ...
-        );
+    % 6. BATCH SAVING, ROLLING SAVE, & RAM FLUSH
+    idxInBatch = mod(numConfigs - 1, mcSettings.batchSize) + 1;
+    startIdx = numConfigs - idxInBatch + 1;
+    endIdx = min(startIdx + mcSettings.batchSize - 1, mcSettings.maxConfigs);
 
-        SimResults.MapData = mapObj; 
-        SimResults.Asset = asset; 
-        SimResults.Sensors = sensors;
-        SimResults.Configs = struct();
-        
-        idx = 1;
-        for i = batchStartIdx:numConfigs
-            SimResults.Configs(idx).ID = i;
-            SimResults.Configs(idx).Effectors = configStore{i};
-            SimResults.Configs(idx).CostMean = CostperCombo(i);
-            SimResults.Configs(idx).Reliability = ReliabilityScore(i);
-            SimResults.Configs(idx).LCB = LCB(i);
-            SimResults.Configs(idx).UCB = UCB(i);
-            SimResults.Configs(idx).KillLocations = killStore{i};
-            
-            SimResults.Configs(idx).Trials = struct();
-            for t = 1:mcSettings.testsPerConfig
-                SimResults.Configs(idx).Trials(t).rngState = rngStore{i}{t};
-                SimResults.Configs(idx).Trials(t).Starts = scenarioStore{i}{t};
-                SimResults.Configs(idx).Trials(t).Paths = pathStore{i}{t};
-                SimResults.Configs(idx).Trials(t).Cost = costDetailsStore{i}(t);
-            end
-            idx = idx + 1;
-        end
-        
-        fileName = sprintf('SimData_Batch_%dto%d_%s.mat', batchStartIdx, numConfigs, datestr(now, 'yyyymmdd_HHMMSS'));
-        save(fileName, 'SimResults', '-v7.3');
-        
-        % Free memory
-        for i = batchStartIdx:numConfigs
-            configStore{i} = [];
-            scenarioStore{i} = [];
-            pathStore{i} = [];
-            costDetailsStore{i} = [];
-            killStore{i} = [];
-            rngStore{i} = [];
-        end
-        
-        batchStartIdx = numConfigs + 1;
-        
-        if separation(numConfigs) > mcSettings.convergenceDelta
-            fprintf('Monte Carlo Simulation converged!\n');
-            break
-        end
+    savePrefix = 'SimData';
+    
+    Metadata = struct('Timestamp', datestr(now), 'MapBounds', mapBounds, ...
+        'NumAdversaries', advConfig.count, 'NumSensors', sensConfig.count, ...
+        'NumEffectors', effConfig.totalEffectors, 'CostConfig', costConfig, ...
+        'ReliabilityThreshold', mcSettings.reliabilityThresh, ...
+        'SensorParams', sensConfig.params, 'EffectorRange', effConfig.range, ...
+        'MCSettings', mcSettings, 'advConfig', advConfig, 'weaponConfig', weaponConfig);
+    
+    if idxInBatch == 1
+        batchTimestamp = datestr(now, 'yyyymmdd_HHMMSS');
+    end
+    
+    fileName = sprintf('%s_Batch_%dto%d_%s.mat', savePrefix, startIdx, endIdx, batchTimestamp);
+
+    currentConfigData = struct();
+    currentConfigData.ID = numConfigs;
+    currentConfigData.Effectors = configStore{numConfigs};
+    currentConfigData.CostMean = CostperCombo(numConfigs);
+    currentConfigData.Reliability = ReliabilityScore(numConfigs);
+    currentConfigData.LCB = LCB(numConfigs);
+    currentConfigData.UCB = UCB(numConfigs);
+    currentConfigData.KillLocations = killStore{numConfigs};
+    currentConfigData.Separation = separation(numConfigs);
+    
+    currentConfigData.Trials = struct();
+    for t = 1:mcSettings.testsPerConfig
+        currentConfigData.Trials(t).rngState = rngStore{numConfigs}{t};
+        currentConfigData.Trials(t).Starts = scenarioStore{numConfigs}{t};
+        currentConfigData.Trials(t).Paths = pathStore{numConfigs}{t};
+        currentConfigData.Trials(t).Cost = costDetailsStore{numConfigs}(t);
+    end
+    
+    if isempty(BatchConfigs)
+        BatchConfigs = currentConfigData;
+    else
+        BatchConfigs(end+1) = currentConfigData;
+    end
+    
+    Configs = BatchConfigs; 
+    MapData = mapObj; AssetData = asset; SensorData = sensors;
+    save(fileName, 'Metadata', 'MapData', 'AssetData', 'SensorData', 'Configs', '-v7.3');
+    
+    validCandidates = find(ReliabilityScore(1:numConfigs) >= mcSettings.reliabilityThresh);
+    if isempty(validCandidates)
+        [~, bestID] = max(ReliabilityScore(1:numConfigs));
+    else
+        [~, minIdx] = min(CostperCombo(validCandidates));
+        bestID = validCandidates(minIdx);
+    end
+    
+    SummaryData = struct();
+    SummaryData.BestID = bestID;
+    SummaryData.CostperCombo = CostperCombo(1:numConfigs);
+    SummaryData.ReliabilityScore = ReliabilityScore(1:numConfigs);
+    SummaryData.SeparationHistory = separation(1:numConfigs); 
+    SummaryData.NumConfigsRun = numConfigs;
+    SummaryData.Metadata = Metadata; 
+    
+    summaryFileName = sprintf('%s_Summary_Latest.mat', savePrefix);
+    save(summaryFileName, 'SummaryData', '-v7.3');
+    
+    configStore{numConfigs} = [];
+    scenarioStore{numConfigs} = [];
+    pathStore{numConfigs} = [];
+    costDetailsStore{numConfigs} = [];
+    killStore{numConfigs} = [];
+    rngStore{numConfigs} = [];
+    
+    if idxInBatch == mcSettings.batchSize || numConfigs == mcSettings.maxConfigs || separation(numConfigs) > mcSettings.convergenceDelta
+        BatchConfigs = [];
+    end
+    
+    if separation(numConfigs) > mcSettings.convergenceDelta
+        fprintf('Monte Carlo Simulation converged!\n');
+        break
     end
 end
-
-% 7. FINAL SUMMARY (BEST CONFIGURATION)
-validCandidates = find(ReliabilityScore(1:numConfigs) >= mcSettings.reliabilityThresh);
-if isempty(validCandidates)
-    fprintf('\nWARNING: Target Reliability NOT Met. Selecting best available.\n');
-    [~, bestID] = max(ReliabilityScore(1:numConfigs));
-else
-    [minCost, idx] = min(CostperCombo(validCandidates));
-    bestID = validCandidates(idx);
-    fprintf('\nBest Configuration: Iteration %d\n', bestID);
-    fprintf('Reliability: %.1f%% | Avg Cost: $%.2f\n', ReliabilityScore(bestID), minCost);
-end
-
-% Save a tiny summary file with the overall stats
-SummaryData.BestID = bestID;
-SummaryData.CostperCombo = CostperCombo(1:numConfigs);
-SummaryData.ReliabilityScore = ReliabilityScore(1:numConfigs);
-SummaryData.NumConfigsRun = numConfigs;
-SummaryData.Metadata = SimResults.Metadata; % Keep metadata from last batch
-summaryFileName = sprintf('SimData_Summary_%s.mat', datestr(now, 'yyyymmdd_HHMMSS'));
-save(summaryFileName, 'SummaryData');
-fprintf('Summary data saved to: %s\n', summaryFileName);
