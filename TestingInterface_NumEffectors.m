@@ -5,10 +5,10 @@ clear; clc; close all;
 % OPTIMIZATION SETTINGS
 mcSettings.maxConfigs = 10000; 
 mcSettings.testsPerConfig = 500; 
-mcSettings.batchSize = 500; 
-mcSettings.convergenceDelta = 10000; 
+mcSettings.batchSize = 2; 
+mcSettings.convergenceDelta = 100; 
 mcSettings.confidenceAlpha = 0.1; 
-mcSettings.reliabilityThresh = 0; 
+mcSettings.reliabilityThresh = 90; 
 
 % MAP SETTINGS
 mapConfig.L = 100; 
@@ -55,11 +55,8 @@ costConfig.asset = 2000;
 costConfig.leak = 250; 
 
 % SIMULATION ENGINE SETTINGS
-simConfig.parallel = true; 
-simConfig.numCores = feature("numcores")-1;
-if simConfig.parallel && isempty(gcp('nocreate'))
-    parpool(simConfig.numCores);
-end
+simConfig.parallel = false; 
+simConfig.numCores = feature("numcores")/2;
 simConfig.tps = 20; 
 simConfig.animateLive = false; 
 
@@ -117,12 +114,8 @@ effectorStructTemplate = struct('location', [0,0], 'range', effConfig.range, ...
 %% MONTE CARLO SIMULATION
 % -----------------------
 numConfigs = 0;
+batchStartIdx = ones(maxE, 1); 
 converged = false(maxE, 1);
-
-% --- Initialize our rolling states outside the loop ---
-batchTimestamps = cell(maxE, 1); 
-BatchConfigs = cell(maxE, 1); 
-
 fprintf('Starting Monte Carlo Simulation...\n');
 
 while numConfigs < mcSettings.maxConfigs && ~all(converged(effConfig.minEffectors:effConfig.maxEffectors))
@@ -179,6 +172,7 @@ while numConfigs < mcSettings.maxConfigs && ~all(converged(effConfig.minEffector
         
         % 3. RUN TESTS
         if simConfig.parallel
+            parpool(simConfig.numCores)
             parfor j = 1:mcSettings.testsPerConfig
                 rng(trialSeeds(numConfigs, j), 'twister');
                 uasArray = UAS.empty(0, advConfig.count); pathIdxs = zeros(advConfig.count, 1); starts = zeros(advConfig.count, 3);
@@ -248,107 +242,35 @@ while numConfigs < mcSettings.maxConfigs && ~all(converged(effConfig.minEffector
                 totEff, numConfigs, bestGlobalID, CostperCombo(totEff, bestGlobalID), min(CostperCombo(totEff, rivalsMask)), separation(totEff, numConfigs));
         end
         
-        % ---------------------------------------------------------
-        % 6. INCREMENTAL BATCH SAVING, ROLLING SUMMARY & RAM FLUSH
-        % ---------------------------------------------------------
-        
-        idxInBatch = mod(numConfigs - 1, mcSettings.batchSize) + 1;
-        startIdx = numConfigs - idxInBatch + 1;
-        endIdx = min(startIdx + mcSettings.batchSize - 1, mcSettings.maxConfigs);
-
-        folder = '\\coeit.osu.edu\home\s\segrue.3\Desktop\C-UAS_Defense-2.30\C-UAS_Defense-2.30\Run1_NumEffectors';
-        if ~exist(folder, 'dir')
-            mkdir(folder); % Ensure directory exists
+        % 6. BATCH SAVING, ROLLING SUMMARY & RAM FLUSH
+        if mod(numConfigs, mcSettings.batchSize) == 0 || numConfigs == mcSettings.maxConfigs || separation(totEff, numConfigs) > mcSettings.convergenceDelta
+            fprintf('[TotEff: %d] Saving Batch (Configs %d to %d)...\n', totEff, batchStartIdx(totEff), numConfigs);
+            SimResults = struct(); SimResults.Metadata = struct('Timestamp', datestr(now), 'MapBounds', mapBounds, 'NumAdversaries', advConfig.count, 'NumSensors', sensConfig.count, 'NumEffectors', totEff, 'CostConfig', costConfig, 'ReliabilityThreshold', mcSettings.reliabilityThresh, 'SensorParams', sensConfig.params, 'EffectorRange', effConfig.range, 'MCSettings', mcSettings, 'advConfig', advConfig, 'weaponConfig', weaponConfig);
+            SimResults.MapData = mapObj; SimResults.Asset = asset; SimResults.Sensors = sensors; SimResults.Configs = struct();
+            idx = 1;
+            for i = batchStartIdx(totEff):numConfigs
+                SimResults.Configs(idx).ID = i; SimResults.Configs(idx).Effectors = configStore{totEff, i}; SimResults.Configs(idx).CostMean = CostperCombo(totEff, i); SimResults.Configs(idx).Reliability = ReliabilityScore(totEff, i); SimResults.Configs(idx).LCB = LCB(totEff, i); SimResults.Configs(idx).UCB = UCB(totEff, i); SimResults.Configs(idx).KillLocations = killStore{totEff, i};
+                SimResults.Configs(idx).Separation = separation(totEff, i); % SAVING SEPARATION
+                SimResults.Configs(idx).Trials = struct();
+                for t = 1:mcSettings.testsPerConfig
+                    SimResults.Configs(idx).Trials(t).rngState = rngStore{totEff, i}{t}; SimResults.Configs(idx).Trials(t).Starts = scenarioStore{totEff, i}{t}; SimResults.Configs(idx).Trials(t).Paths = pathStore{totEff, i}{t}; SimResults.Configs(idx).Trials(t).Cost = costDetailsStore{totEff, i}(t);
+                end
+                idx = idx + 1;
+            end
+            savePrefix = sprintf('Tot%d_%s_%s', totEff, effConfig.mobilityType, weaponConfig.weaponType);
+            fileName = sprintf('%s_Batch_%dto%d_%s.mat', savePrefix, batchStartIdx(totEff), numConfigs, datestr(now, 'yyyymmdd_HHMMSS'));
+            save(fileName, 'SimResults', '-v7.3');
+            
+            % rolling summary
+            validCandidates = find(ReliabilityScore(totEff, 1:numConfigs) >= mcSettings.reliabilityThresh);
+            if isempty(validCandidates); [~, bestID] = max(ReliabilityScore(totEff, 1:numConfigs));
+            else; [~, minIdx] = min(CostperCombo(totEff, validCandidates)); bestID = validCandidates(minIdx); end
+            SummaryData = struct(); SummaryData.BestID = bestID; SummaryData.CostperCombo = CostperCombo(totEff, 1:numConfigs); SummaryData.ReliabilityScore = ReliabilityScore(totEff, 1:numConfigs); SummaryData.SeparationHistory = separation(totEff, 1:numConfigs); SummaryData.NumConfigsRun = numConfigs; SummaryData.Metadata = SimResults.Metadata;
+            save(sprintf('%s_Summary_Latest.mat', savePrefix), 'SummaryData');
+            
+            for i = batchStartIdx(totEff):numConfigs; configStore{totEff, i} = []; scenarioStore{totEff, i} = []; pathStore{totEff, i} = []; costDetailsStore{totEff, i} = []; killStore{totEff, i} = []; rngStore{totEff, i} = []; end
+            batchStartIdx(totEff) = numConfigs + 1;
+            if separation(totEff, numConfigs) > mcSettings.convergenceDelta; converged(totEff) = true; end
         end
-        savePrefix = sprintf('Tot%d_%s_%s', totEff, effConfig.mobilityType, weaponConfig.weaponType);
-        
-        Metadata = struct('Timestamp', datestr(now), 'MapBounds', mapBounds, ...
-            'NumAdversaries', advConfig.count, 'NumSensors', sensConfig.count, ...
-            'NumEffectors', totEff, 'CostConfig', costConfig, ...
-            'ReliabilityThreshold', mcSettings.reliabilityThresh, ...
-            'SensorParams', sensConfig.params, 'EffectorRange', effConfig.range, ...
-            'MCSettings', mcSettings, 'advConfig', advConfig, 'weaponConfig', weaponConfig);
-        
-        % Lock in the timestamp for the file name if starting a new batch
-        if idxInBatch == 1
-            batchTimestamps{totEff} = datestr(now, 'yyyymmdd_HHMMSS');
-        end
-        
-        fileName = sprintf('%s_Batch_%dto%d_%s.mat', savePrefix, startIdx, endIdx, batchTimestamps{totEff});
-        fullPath = fullfile(folder, fileName);
-
-        % Package the current configuration
-        currentConfigData = struct();
-        currentConfigData.ID = numConfigs;
-        currentConfigData.Effectors = configStore{totEff, numConfigs};
-        currentConfigData.CostMean = CostperCombo(totEff, numConfigs);
-        currentConfigData.Reliability = ReliabilityScore(totEff, numConfigs);
-        currentConfigData.LCB = LCB(totEff, numConfigs);
-        currentConfigData.UCB = UCB(totEff, numConfigs);
-        currentConfigData.KillLocations = killStore{totEff, numConfigs};
-        currentConfigData.Separation = separation(totEff, numConfigs);
-        
-        currentConfigData.Trials = struct();
-        for t = 1:mcSettings.testsPerConfig
-            currentConfigData.Trials(t).rngState = rngStore{totEff, numConfigs}{t};
-            currentConfigData.Trials(t).Starts = scenarioStore{totEff, numConfigs}{t};
-            currentConfigData.Trials(t).Paths = pathStore{totEff, numConfigs}{t};
-            currentConfigData.Trials(t).Cost = costDetailsStore{totEff, numConfigs}(t);
-        end
-        
-        % Append the current configuration to the Rolling RAM Buffer
-        if isempty(BatchConfigs{totEff})
-            BatchConfigs{totEff} = currentConfigData;
-        else
-            BatchConfigs{totEff}(end+1) = currentConfigData;
-        end
-        
-        % --- THE MAGIC: Full Safe Overwrite ---
-        % By saving the whole file cleanly, we avoid network drive indexing errors 
-        % and HDF5 file bloat. It runs incredibly fast and guarantees integrity.
-        Configs = BatchConfigs{totEff}; 
-        MapData = mapObj; AssetData = asset; SensorData = sensors;
-        save(fullPath, 'Metadata', 'MapData', 'AssetData', 'SensorData', 'Configs', '-v7.3');
-        
-        % Update the rolling summary
-        validCandidates = find(ReliabilityScore(totEff, 1:numConfigs) >= mcSettings.reliabilityThresh);
-        if isempty(validCandidates)
-            [~, bestID] = max(ReliabilityScore(totEff, 1:numConfigs));
-        else
-            [~, minIdx] = min(CostperCombo(totEff, validCandidates));
-            bestID = validCandidates(minIdx);
-        end
-        
-        SummaryData = struct();
-        SummaryData.BestID = bestID;
-        SummaryData.CostperCombo = CostperCombo(totEff, 1:numConfigs);
-        SummaryData.ReliabilityScore = ReliabilityScore(totEff, 1:numConfigs);
-        SummaryData.SeparationHistory = separation(totEff, 1:numConfigs);
-        SummaryData.NumConfigsRun = numConfigs;
-        SummaryData.Metadata = Metadata;
-        
-        summaryFileName = sprintf('%s_Summary_Latest.mat', savePrefix);
-        summaryFullPath = fullfile(folder, summaryFileName);
-        save(summaryFullPath, 'SummaryData', '-v7.3');
-        
-        % RAM Flush: Instantly clear out cell arrays to keep memory clean
-        configStore{totEff, numConfigs} = [];
-        scenarioStore{totEff, numConfigs} = [];
-        pathStore{totEff, numConfigs} = [];
-        costDetailsStore{totEff, numConfigs} = [];
-        killStore{totEff, numConfigs} = [];
-        rngStore{totEff, numConfigs} = [];
-        
-        % If the batch is completely full, dump the RAM Buffer so the next file starts fresh
-        if idxInBatch == mcSettings.batchSize || numConfigs == mcSettings.maxConfigs || separation(totEff, numConfigs) > mcSettings.convergenceDelta
-            BatchConfigs{totEff} = [];
-        end
-        
-        % Check if we met convergence
-        if separation(totEff, numConfigs) > mcSettings.convergenceDelta
-            converged(totEff) = true;
-            fprintf('[TotEff: %d] Converged at config %d!\n', totEff, numConfigs);
-        end
-        
     end
 end
