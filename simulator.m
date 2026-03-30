@@ -475,6 +475,7 @@ classdef simulator < handle
 
                 replanEveryTicks = 30;
                 replanDist = 5.0;
+                goalTolerance = max(0.75, step);
 
                 interceptPoseRaw = obj.predictIntercept_(targetPosXY, targetObj);
 
@@ -491,6 +492,7 @@ classdef simulator < handle
                 if ~all(isfinite(startPose))
                     startPose = [eff.location 0];
                 end
+                startPose = obj.sanitizeMobilePose_(startPose, []);
 
                 if all(isfinite(eff.lastInterceptPose))
                     interceptMoved = norm(interceptPoseRaw(1:2) - eff.lastInterceptPose(1:2)) >= replanDist;
@@ -498,14 +500,15 @@ classdef simulator < handle
                     interceptMoved = true;
                 end
 
-                needReplan = isempty(eff.path) || ((obj.tick - eff.lastPlanTick) >= replanEveryTicks) || interceptMoved;
+                goalPose = obj.sanitizeMobilePose_(interceptPoseRaw, startPose);
+                pathUsable = obj.pathIsUsable_(eff, goalPose, goalTolerance);
+
+                needReplan = isempty(eff.path) || ~pathUsable || ...
+                    ((obj.tick - eff.lastPlanTick) >= replanEveryTicks) || interceptMoved;
 
                 if needReplan
-                    startPose = obj.sanitizeMobilePose_(startPose, []); % fix: ensure valid mobile start pose
-                    interceptPose = obj.sanitizeMobilePose_(interceptPoseRaw, startPose); % fix: ensure valid mobile goal pose
-
                     try
-                        pathObj = plan(eff.planner, startPose, interceptPose);
+                        pathObj = plan(eff.planner, startPose, goalPose);
                         if isprop(pathObj, "States") && ~isempty(pathObj.States)
                             eff.path = pathObj.States;
                             if size(eff.path, 1) >= 2
@@ -523,63 +526,67 @@ classdef simulator < handle
                     end
 
                     eff.lastPlanTick = obj.tick;
-                    eff.lastInterceptPose = interceptPose;
+                    eff.lastInterceptPose = goalPose;
                 end
 
                 moved = false;
                 if ~isempty(eff.path)
                     idx = max(1, min(eff.pathIdx, size(eff.path, 1)));
                     nextPose = eff.path(idx, :);
+                    nextPose = obj.clampPose_(nextPose);
 
-                    if all(isfinite(nextPose))
-                        eff.location = nextPose(1:2);
-                        eff.heading = nextPose(3);
-                        eff.pathIdx = eff.pathIdx + 1;
-                        if eff.pathIdx > size(eff.path, 1)
+                    if all(isfinite(nextPose)) && obj.isPoseValid_(nextPose)
+                        currPos3 = obj.getGroundPoint3_(eff.location(1), eff.location(2), simulator.effectorHeight_());
+                        nextPos3 = obj.getGroundPoint3_(nextPose(1), nextPose(2), simulator.effectorHeight_());
+
+                        if ~obj.segmentHitsTerrain_(currPos3, nextPos3, 0.02)
+                            eff.location = nextPose(1:2);
+                            eff.heading = nextPose(3);
+                            eff.pathIdx = eff.pathIdx + 1;
+                            if eff.pathIdx > size(eff.path, 1)
+                                eff.path = [];
+                                eff.pathIdx = 1;
+                            end
+                            moved = true;
+                        else
                             eff.path = [];
                             eff.pathIdx = 1;
                         end
-                        moved = true;
                     else
                         eff.path = [];
+                        eff.pathIdx = 1;
                     end
                 end
 
                 if ~moved
-                    goalPose = obj.sanitizeMobilePose_(interceptPoseRaw, startPose); % fix: use sanitized fallback goal
-                    goal = goalPose(1:2);
-                    v = goal - eff.location;
-                    nv = norm(v);
-                    if nv > 1e-9
-                        dir = v / nv;
-                        newLoc = eff.location + min(step, nv) * dir; % fix: prevent fallback overshoot
-                        newLoc(1) = min(max(newLoc(1), xMin), xMax);
-                        newLoc(2) = min(max(newLoc(2), yMin), yMax);
-                        eff.location = newLoc;
-                        eff.heading = atan2(dir(2), dir(1));
-                    end
+                    [eff.location, eff.heading] = obj.moveTowardGoalSafely_(eff.location, eff.heading, goalPose, step);
                 end
 
+                eff.location(1) = min(max(eff.location(1), xMin), xMax);
+                eff.location(2) = min(max(eff.location(2), yMin), yMax);
                 obj.effectors(e) = eff;
             end
         end
 
-        function interceptPose = predictIntercept_(~, targetPosXY, targetObj)
+        function interceptPose = predictIntercept_(obj, targetPosXY, targetObj)
             lookahead = 2.0;
             vhat = [1 0];
-            if isprop(targetObj, "targetUnitVector")
+
+            if nargin >= 3 && ~isempty(targetObj) && isprop(targetObj, "targetUnitVector")
                 v = targetObj.targetUnitVector(1:2);
-                if norm(v) > 0
+                if all(isfinite(v)) && norm(v) > 0
                     vhat = v / norm(v);
                 end
             end
+
             spd = 0;
-            if isprop(targetObj, "speed")
-                spd = targetObj.speed;
+            if nargin >= 3 && ~isempty(targetObj) && isprop(targetObj, "speed")
+                spd = max(0, targetObj.speed);
             end
+
             ip = targetPosXY + vhat * spd * lookahead;
             hdg = atan2(vhat(2), vhat(1));
-            interceptPose = [ip, hdg];
+            interceptPose = obj.clampPose_([ip, hdg]);
         end
 
         function poseOut = sanitizeMobilePose_(obj, poseIn, fallbackPose)
@@ -695,6 +702,71 @@ classdef simulator < handle
             end
 
             poseOut = bestPose;
+        end
+
+        function tf = pathIsUsable_(obj, eff, goalPose, goalTolerance)
+            tf = ~isempty(eff.path) && eff.pathIdx <= size(eff.path, 1);
+            if ~tf
+                return
+            end
+
+            if any(~isfinite(goalPose))
+                tf = false;
+                return
+            end
+
+            finalPose = obj.clampPose_(eff.path(end, :));
+            if ~obj.isPoseValid_(finalPose)
+                tf = false;
+                return
+            end
+
+            tf = norm(finalPose(1:2) - goalPose(1:2)) <= goalTolerance;
+        end
+
+        function [newLoc, newHeading] = moveTowardGoalSafely_(obj, currentLoc, currentHeading, goalPose, step)
+            newLoc = currentLoc;
+            newHeading = currentHeading;
+
+            goal = goalPose(1:2);
+            v = goal - currentLoc;
+            nv = norm(v);
+            if nv <= 1e-9
+                return
+            end
+
+            dir = v / nv;
+            moveDist = min(step, nv);
+
+            candidateLoc = currentLoc + moveDist * dir;
+            candidatePose = obj.clampPose_([candidateLoc, atan2(dir(2), dir(1))]);
+            candidatePose = obj.sanitizeMobilePose_(candidatePose, [currentLoc, currentHeading]);
+
+            currPos3 = obj.getGroundPoint3_(currentLoc(1), currentLoc(2), simulator.effectorHeight_());
+            candPos3 = obj.getGroundPoint3_(candidatePose(1), candidatePose(2), simulator.effectorHeight_());
+
+            if obj.isPoseValid_(candidatePose) && ~obj.segmentHitsTerrain_(currPos3, candPos3, 0.02)
+                newLoc = candidatePose(1:2);
+                newHeading = candidatePose(3);
+                return
+            end
+
+            waypointPose = obj.nearestFreePose_(goalPose, [currentLoc, currentHeading]);
+            if obj.isPoseValid_(waypointPose)
+                v2 = waypointPose(1:2) - currentLoc;
+                nv2 = norm(v2);
+                if nv2 > 1e-9
+                    dir2 = v2 / nv2;
+                    moveDist2 = min(step, nv2);
+                    candidatePose = obj.clampPose_([currentLoc + moveDist2 * dir2, atan2(dir2(2), dir2(1))]);
+                    currPos3 = obj.getGroundPoint3_(currentLoc(1), currentLoc(2), simulator.effectorHeight_());
+                    candPos3 = obj.getGroundPoint3_(candidatePose(1), candidatePose(2), simulator.effectorHeight_());
+                    if obj.isPoseValid_(candidatePose) && ~obj.segmentHitsTerrain_(currPos3, candPos3, 0.02)
+                        newLoc = candidatePose(1:2);
+                        newHeading = candidatePose(3);
+                    end
+                end
+            end
         end
 
         function tf = hasLineOfSight_(obj, p0, p1, clearance)
@@ -981,25 +1053,30 @@ classdef simulator < handle
             canSolve = false;
             aimPoint = targetPos;
             vhat = [1 0];
+
             if isprop(uasObj, "targetUnitVector")
                 v = uasObj.targetUnitVector(1:2);
-                if norm(v) > 0
+                if all(isfinite(v)) && norm(v) > 0
                     vhat = v / norm(v);
                 end
             end
+
             vTarget = [0 0 0];
             if isprop(uasObj, "speed")
-                vTarget = [uasObj.speed * vhat, 0];
+                vTarget = [max(0, uasObj.speed) * vhat, 0];
             end
 
             r = targetPos - shooterPos;
-            s = obj.kineticProjectileSpeed;
+            s = max(obj.kineticProjectileSpeed, eps);
             a = dot(vTarget, vTarget) - s^2;
             b = 2 * dot(r, vTarget);
             c = dot(r, r);
 
             if abs(a) < 1e-12
-                t = (abs(b) < 1e-12) * 0 + (abs(b) >= 1e-12) * (-c / b);
+                if abs(b) < 1e-12
+                    return
+                end
+                t = -c / b;
                 if t > 0
                     aimPoint = targetPos + vTarget * t;
                     canSolve = true;
