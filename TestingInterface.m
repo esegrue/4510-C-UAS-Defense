@@ -149,6 +149,13 @@ while numConfigs < mcSettings.maxConfigs
         else
             currentEffectors(e).mode = "MOBILE";
             currentEffectors(e).speed = effConfig.mobileSpeed;
+
+            dir2D = asset.location - currentEffectors(e).location;
+            if norm(dir2D) > 0
+                currentEffectors(e).heading = atan2(dir2D(2), dir2D(1));
+            else
+                currentEffectors(e).heading = 0;
+            end
         end
     end
     configStore{numConfigs} = currentEffectors;
