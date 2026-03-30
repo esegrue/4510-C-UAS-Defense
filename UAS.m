@@ -61,6 +61,10 @@ classdef UAS < handle
         function linearMotion(obj, time)
             if obj.active
                 obj.position = obj.position + obj.speed*time*obj.targetUnitVector;
+
+                % FIX: keep heading consistent
+                obj.heading = atan2(obj.targetUnitVector(2), obj.targetUnitVector(1));
+                obj.targetUnitVector = [cos(obj.heading), sin(obj.heading), 0];
             end
         end
         
@@ -72,29 +76,54 @@ classdef UAS < handle
                     sv = validatorOccupancyMap(ss);
                     sv.Map = costMap;
                     obj.planner = plannerHybridAStar(sv, 'MinTurningRadius', turnRadius, "InterpolationDistance",obj.speed*time);
-                    refPath = plan(obj.planner, [obj.position(1:2), obj.heading], [obj.target, obj.heading+pi/2]);
-                    obj.pathPoints = refPath.States(:, 1:2); 
-                    obj.pathHeadings = refPath.States(:,3);
+
+                    % FIX: protect planner
+                    try
+                        refPath = plan(obj.planner, [obj.position(1:2), obj.heading], [obj.target, obj.heading+pi/2]);
+                        if ~isempty(refPath.States)
+                            obj.pathPoints = refPath.States(:, 1:2); 
+                            obj.pathHeadings = refPath.States(:,3);
+                        end
+                    catch
+                        obj.pathPoints = [];
+                        obj.pathHeadings = [];
+                    end
+
                     fprintf("WARNING: Generating paths in-loop. Consider pre-generating for speed.\n")
                 end
     
                 if tick-obj.tickOffset~=0
-                    if (tick - obj.tickOffset) <= length(obj.pathPoints(:,1))
+                    if ~isempty(obj.pathPoints) && (tick - obj.tickOffset) <= length(obj.pathPoints(:,1))
                         pose = obj.pathPoints(tick - obj.tickOffset,:);
                         obj.position = [pose(1), pose(2), obj.position(3)];
-                        obj.heading = obj.pathHeadings(tick - obj.tickOffset);
+
+                        if ~isempty(obj.pathHeadings)
+                            obj.heading = obj.pathHeadings(tick - obj.tickOffset);
+                        end
+
+                        % FIX: keep direction synced
+                        obj.targetUnitVector = [cos(obj.heading), sin(obj.heading), 0];
                         
                     elseif isempty(obj.adversary_path) 
                         positionxy = [obj.position(1), obj.position(2)];
                         posEsc = [costMap.XWorldLimits(1), obj.position(2); obj.position(1), costMap.YWorldLimits(1); costMap.XWorldLimits(2), obj.position(2); obj.position(1), costMap.YWorldLimits(2)];
                         [~, Iesc] = min(sum((posEsc - positionxy).^2, 2));
                         obj.target = posEsc(Iesc, :);
-                        refPath = plan(obj.planner, [positionxy, obj.heading], [obj.target, obj.heading]);
-                        obj.pathPoints = refPath.States(:, 1:2);  
-                        obj.tickOffset = tick-1;
-                        pose = obj.pathPoints(tick - obj.tickOffset,:);
-                        obj.position = [pose(1), pose(2), obj.position(3)];
-                        obj.pathHeadings = refPath.States(:,3);
+
+                        try
+                            refPath = plan(obj.planner, [positionxy, obj.heading], [obj.target, obj.heading]);
+                            if ~isempty(refPath.States)
+                                obj.pathPoints = refPath.States(:, 1:2);  
+                                obj.tickOffset = tick-1;
+                                pose = obj.pathPoints(tick - obj.tickOffset,:);
+                                obj.position = [pose(1), pose(2), obj.position(3)];
+                                obj.pathHeadings = refPath.States(:,3);
+                                obj.heading = obj.pathHeadings(tick - obj.tickOffset);
+                            end
+                        catch
+                            obj.targetUnitVector = [cos(obj.heading), sin(obj.heading), 0];
+                            obj.position = obj.position + obj.speed * time * obj.targetUnitVector;
+                        end
                         
                     else
                         % BUG FIX: Coast straight forward if pre-planned points run out
@@ -121,6 +150,10 @@ classdef UAS < handle
                     obj.assetFound(dist2D, asset.location, time);
                 else
                     obj.position = obj.position + obj.tempSpeed*time*obj.targetUnitVector;
+
+                    % FIX: keep heading consistent
+                    obj.heading = atan2(obj.targetUnitVector(2), obj.targetUnitVector(1));
+                    obj.targetUnitVector = [cos(obj.heading), sin(obj.heading), 0];
                 end
             end
         end
@@ -131,8 +164,15 @@ classdef UAS < handle
             assetVector = [assetLocation, 0] - [obj.position(1:2), 0];
             tuv = [obj.targetUnitVector(1:2), 0];
             
+            % FIX: safe denominator
+            denom = norm(tuv)*norm(assetVector);
+            if denom <= eps
+                obj.position = obj.position + obj.tempSpeed*time*obj.targetUnitVector;
+                return
+            end
+            
             % Safe ACOS calculation to prevent complex numbers
-            dotProd = dot(tuv, assetVector)/(norm(tuv)*norm(assetVector));
+            dotProd = dot(tuv, assetVector)/denom;
             dotProd = max(-1, min(1, dotProd));
             turnAngle = acos(dotProd);
             
@@ -159,6 +199,12 @@ classdef UAS < handle
             
             newVec2D = (DCM * obj.targetUnitVector(1:2)')';
             obj.targetUnitVector = [newVec2D, 0];
+
+            % FIX: normalize + sync heading
+            if norm(obj.targetUnitVector(1:2)) > 0
+                obj.targetUnitVector(1:2) = obj.targetUnitVector(1:2)/norm(obj.targetUnitVector(1:2));
+            end
+            obj.heading = atan2(obj.targetUnitVector(2), obj.targetUnitVector(1));
             
             obj.position = obj.position + obj.tempSpeed*time*obj.targetUnitVector;
         end
