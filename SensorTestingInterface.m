@@ -19,14 +19,14 @@ sensConfig.params = struct( ...
     'd50', 25, 'k', 10, 'pings', 3, 'duration', 1.0, 'scanRate', 0.2);
 
 % Adversaries
-advConfig.count = 25;
+advConfig.count = 1;
 advConfig.speed = 15;
 advConfig.turnRadius = 5;
 advConfig.altitude = 10;
 advConfig.planner = 'HybridAStar';
 
 % Monte Carlo
-mcSettings.maxConfigs = 1000;
+mcSettings.maxConfigs = 1;
 mcSettings.testsPerConfig = 1;
 
 % Simulation engine

@@ -42,12 +42,17 @@ function filename = adversaryPathsGenerator(dT, speed, turnRadius, elevationMap,
     paths = {};
     
     while true
-        side = entryBoundary(randi(4),:); %random side of the map of form [xlow xhigh ylow yhigh]
-        entryPos = [side(1) + rand()*(side(2) - side(1)), side(3) + rand()*(side(4) - side(3))];
-        entryHeading = atan2(targetPos(2) - entryPos(2), targetPos(1) - entryPos(1)); %starts out naively pointed towards target
-        exitSide = entryBoundary(randi(4),:);
-        exitPos = entryPos;%[exitSide(1) + rand()*(exitSide(2) - exitSide(1)), exitSide(3) + rand()*(exitSide(4) - exitSide(3))];
-        exitHeading = pi+entryHeading;%atan2(exitPos(2) - targetPos(2), exitPos(1) - targetPos(1));
+        entryIdx = randi(4);
+side = entryBoundary(entryIdx,:);
+entryPos = [side(1) + rand()*(side(2) - side(1)), side(3) + rand()*(side(4) - side(3))];
+
+exitIdx = randi(4);
+while exitIdx == entryIdx
+    exitIdx = randi(4);
+end
+exitSide = entryBoundary(exitIdx,:);
+exitPos  = [exitSide(1) + rand()*(exitSide(2) - exitSide(1)), ...
+            exitSide(3) + rand()*(exitSide(4) - exitSide(3))];
         
         inPath = plan(planner, [entryPos, entryHeading], [targetPos, entryHeading+pi/2]);
         inStates = inPath.States; % [x y theta]
