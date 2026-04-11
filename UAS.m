@@ -26,6 +26,7 @@ classdef UAS < handle
             arguments
                 speed, entrance, target, mode, altitude, turnRadius
                 options.adversary_path = [];
+                options.searchRange (1,1) double = 20;
             end
             obj.speed = speed;
             obj.altitude = altitude;
@@ -34,8 +35,8 @@ classdef UAS < handle
             obj.target = target;
             obj.mode = mode;
             obj.tempSpeed = speed;
+            obj.range = options.searchRange;
             
-            % Safe vector normalization
             dir2D = obj.target(1:2) - obj.position(1:2);
             nDir = norm(dir2D);
             if nDir > 0
@@ -44,9 +45,9 @@ classdef UAS < handle
                 obj.targetUnitVector = [1, 0, 0]; 
             end
             
-            obj.active = true; % Default to active
+            obj.active = true; 
 
-            obj.adversary_path = options.adversary_path; %please note that this will have both ingress and egress
+            obj.adversary_path = options.adversary_path; 
             obj.pathPoints = [];
             obj.tickOffset = 0;
             obj.planner = [];
@@ -61,6 +62,9 @@ classdef UAS < handle
         function linearMotion(obj, time)
             if obj.active
                 obj.position = obj.position + obj.speed*time*obj.targetUnitVector;
+
+                obj.heading = atan2(obj.targetUnitVector(2), obj.targetUnitVector(1));
+                obj.targetUnitVector = [cos(obj.heading), sin(obj.heading), 0];
             end
         end
         
@@ -72,37 +76,57 @@ classdef UAS < handle
                     sv = validatorOccupancyMap(ss);
                     sv.Map = costMap;
                     obj.planner = plannerHybridAStar(sv, 'MinTurningRadius', turnRadius, "InterpolationDistance",obj.speed*time);
-                    refPath = plan(obj.planner, [obj.position(1:2), obj.heading], [obj.target, obj.heading+pi/2]);
-                    obj.pathPoints = refPath.States(:, 1:2); 
-                    obj.pathHeadings = refPath.States(:,3);
+
+                    try
+                        refPath = plan(obj.planner, [obj.position(1:2), obj.heading], [obj.target, obj.heading+pi/2]);
+                        if ~isempty(refPath.States)
+                            obj.pathPoints = refPath.States(:, 1:2); 
+                            obj.pathHeadings = refPath.States(:,3);
+                        end
+                    catch
+                        obj.pathPoints = [];
+                        obj.pathHeadings = [];
+                    end
+
                     fprintf("WARNING: Generating paths in-loop. Consider pre-generating for speed.\n")
                 end
     
                 if tick-obj.tickOffset~=0
-                    if (tick - obj.tickOffset) <= length(obj.pathPoints(:,1))
+                    if ~isempty(obj.pathPoints) && (tick - obj.tickOffset) <= length(obj.pathPoints(:,1))
                         pose = obj.pathPoints(tick - obj.tickOffset,:);
                         obj.position = [pose(1), pose(2), obj.position(3)];
-                        obj.heading = obj.pathHeadings(tick - obj.tickOffset);
+
+                        if ~isempty(obj.pathHeadings)
+                            obj.heading = obj.pathHeadings(tick - obj.tickOffset);
+                        end
+
+                        obj.targetUnitVector = [cos(obj.heading), sin(obj.heading), 0];
                         
                     elseif isempty(obj.adversary_path) 
                         positionxy = [obj.position(1), obj.position(2)];
                         posEsc = [costMap.XWorldLimits(1), obj.position(2); obj.position(1), costMap.YWorldLimits(1); costMap.XWorldLimits(2), obj.position(2); obj.position(1), costMap.YWorldLimits(2)];
                         [~, Iesc] = min(sum((posEsc - positionxy).^2, 2));
                         obj.target = posEsc(Iesc, :);
-                        refPath = plan(obj.planner, [positionxy, obj.heading], [obj.target, obj.heading]);
-                        obj.pathPoints = refPath.States(:, 1:2);  
-                        obj.tickOffset = tick-1;
-                        pose = obj.pathPoints(tick - obj.tickOffset,:);
-                        obj.position = [pose(1), pose(2), obj.position(3)];
-                        obj.pathHeadings = refPath.States(:,3);
+
+                        try
+                            refPath = plan(obj.planner, [positionxy, obj.heading], [obj.target, obj.heading]);
+                            if ~isempty(refPath.States)
+                                obj.pathPoints = refPath.States(:, 1:2);  
+                                obj.tickOffset = tick-1;
+                                pose = obj.pathPoints(tick - obj.tickOffset,:);
+                                obj.position = [pose(1), pose(2), obj.position(3)];
+                                obj.pathHeadings = refPath.States(:,3);
+                                obj.heading = obj.pathHeadings(tick - obj.tickOffset);
+                            end
+                        catch
+                            obj.targetUnitVector = [cos(obj.heading), sin(obj.heading), 0];
+                            obj.position = obj.position + obj.speed * time * obj.targetUnitVector;
+                        end
                         
                     else
-                        % BUG FIX: Coast straight forward if pre-planned points run out
                         obj.targetUnitVector = [cos(obj.heading), sin(obj.heading), 0];
                         obj.position = obj.position + obj.speed * time * obj.targetUnitVector;
                     end
-                else
-                    obj.position = obj.position;
                 end
             end
         end
@@ -111,8 +135,6 @@ classdef UAS < handle
             if ~obj.active
                 return;
             end
-            
-            obj.range = 20;
 
             if ~isAssetDestroyed
                 dist2D = norm(obj.position(1:2) - asset.location(1:2));
@@ -121,6 +143,9 @@ classdef UAS < handle
                     obj.assetFound(dist2D, asset.location, time);
                 else
                     obj.position = obj.position + obj.tempSpeed*time*obj.targetUnitVector;
+
+                    obj.heading = atan2(obj.targetUnitVector(2), obj.targetUnitVector(1));
+                    obj.targetUnitVector = [cos(obj.heading), sin(obj.heading), 0];
                 end
             end
         end
@@ -131,8 +156,13 @@ classdef UAS < handle
             assetVector = [assetLocation, 0] - [obj.position(1:2), 0];
             tuv = [obj.targetUnitVector(1:2), 0];
             
-            % Safe ACOS calculation to prevent complex numbers
-            dotProd = dot(tuv, assetVector)/(norm(tuv)*norm(assetVector));
+            denom = norm(tuv)*norm(assetVector);
+            if denom <= eps
+                obj.position = obj.position + obj.tempSpeed*time*obj.targetUnitVector;
+                return
+            end
+            
+            dotProd = dot(tuv, assetVector)/denom;
             dotProd = max(-1, min(1, dotProd));
             turnAngle = acos(dotProd);
             
@@ -159,6 +189,11 @@ classdef UAS < handle
             
             newVec2D = (DCM * obj.targetUnitVector(1:2)')';
             obj.targetUnitVector = [newVec2D, 0];
+
+            if norm(obj.targetUnitVector(1:2)) > 0
+                obj.targetUnitVector(1:2) = obj.targetUnitVector(1:2)/norm(obj.targetUnitVector(1:2));
+            end
+            obj.heading = atan2(obj.targetUnitVector(2), obj.targetUnitVector(1));
             
             obj.position = obj.position + obj.tempSpeed*time*obj.targetUnitVector;
         end

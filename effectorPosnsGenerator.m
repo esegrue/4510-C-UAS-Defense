@@ -8,7 +8,7 @@ function effectorPosnsGenerator(xlim, ylim, filename, reset)
     % filename: .mat file to save to
 
     % Outputs -
-    % filename: updated position bank
+    % saved filename: updated position bank
     
     arguments
         xlim (1,2) double
@@ -21,7 +21,7 @@ function effectorPosnsGenerator(xlim, ylim, filename, reset)
     y0 = ylim(1);
     xdiff = xlim(2) - x0;
     ydiff = ylim(2) - y0;
-    posns = [0,0];
+    posns = zeros(0, 2);   
     
     i = 1;
     hWaitbar = waitbar(0, 'New positions: 1', 'Name', 'Generating effector positions','CreateCancelBtn','delete(gcbf)');

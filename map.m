@@ -6,10 +6,12 @@ classdef map < handle
         terrainProxy
         
         UASTrail
+        UASTrackedTrail % <--- NEW PROPERTY
         UASHead
         UASsensed
         UASkilled
         UAScrashed      
+        UASmissed 
         assetDestroyed
         assets
         timeBox
@@ -50,7 +52,6 @@ classdef map < handle
             end
             obj.terrain.X = X; obj.terrain.Y = Y; obj.terrain.Z = Z;
             
-            % FIXED: Swapped grid vectors to match transposed Z
             obj.terrainProxy = griddedInterpolant({x_vec, y_vec}, Z', 'linear', 'nearest');
         end
 
@@ -82,16 +83,19 @@ classdef map < handle
 
             obj.displayMap
             obj.UASTrail = gobjects(1, numUAS);
+            obj.UASTrackedTrail = gobjects(1, numUAS); % <--- INITIALIZE MAGENTA TRAIL
             obj.UASHead = gobjects(1, numUAS);
             z_offset = 1; 
 
             for i = 1:numUAS
                 obj.UASTrail(i) = plot3(NaN, NaN, NaN, 'Color', 'r', 'DisplayName', "UAS Trail " + i);
+                obj.UASTrackedTrail(i) = plot3(NaN, NaN, NaN, 'Color', 'm', 'LineWidth', 2.5, 'DisplayName', "UAS Tracked " + i); % <--- PLOT MAGENTA TRAIL
                 obj.UASHead(i) = plot3(NaN, NaN, NaN, 'Color', 'r', 'Marker', '^', 'DisplayName', "UAS " + i);
             end
 
             obj.UASsensed = plot3(NaN, NaN, NaN, 'Color', 'k', 'Marker', 'o', 'LineStyle', 'none', 'DisplayName', "Detection");
             obj.UASkilled = plot3(NaN, NaN, NaN, 'Marker', 'x', 'Color', 'g', 'LineWidth', 2, 'MarkerSize', 15, 'LineStyle', 'none', 'DisplayName', "Kill Event");
+            obj.UASmissed = plot3(NaN, NaN, NaN, 'Marker', 'o', 'Color', 'g', 'LineWidth', 2, 'MarkerSize', 8, 'LineStyle', 'none', 'DisplayName', "Miss Event");
             obj.UAScrashed = plot3(NaN, NaN, NaN, 'Marker', 'x', 'Color', 'k', 'LineWidth', 2, 'MarkerSize', 15, 'LineStyle', 'none', 'DisplayName', "Terrain Crash");
             obj.assetDestroyed = plot3(NaN, NaN, NaN, 'Marker', 'x', 'Color', 'r', 'MarkerSize', 20, 'LineWidth', 2, 'DisplayName', "Asset Destroyed");
 
@@ -174,13 +178,31 @@ classdef map < handle
             end
         end
 
-        function updateUASAnimation(obj, UASPos_all)
+        function updateUASAnimation(obj, UASPos_all, UASTrackedPos_all, uasTracked) % <--- ADDED ARGS
             for i = 1:length(obj.UASTrail)
                 if i <= length(UASPos_all)
                     pos = UASPos_all{i}; 
                     if ~isempty(pos)
+                        % Draw Red Trail
                         set(obj.UASTrail(i), 'XData', pos(1:end-1, 1), 'YData', pos(1:end-1, 2), 'ZData', pos(1:end-1, 3));
                         set(obj.UASHead(i), 'XData', pos(end, 1), 'YData', pos(end, 2), 'ZData', pos(end, 3));
+                        
+                        % Draw Magenta Tracked Trail Segments
+                        if nargin >= 3 && i <= length(UASTrackedPos_all)
+                            trk_pos = UASTrackedPos_all{i};
+                            if ~isempty(trk_pos)
+                                set(obj.UASTrackedTrail(i), 'XData', trk_pos(:, 1), 'YData', trk_pos(:, 2), 'ZData', trk_pos(:, 3));
+                            end
+                        end
+                        
+                        % Change Head Color Dynamically
+                        if nargin >= 4 && i <= length(uasTracked)
+                            if uasTracked(i)
+                                set(obj.UASHead(i), 'Color', 'm');
+                            else
+                                set(obj.UASHead(i), 'Color', 'r');
+                            end
+                        end
                     end
                 end
             end
@@ -206,6 +228,21 @@ classdef map < handle
                 set(obj.UASkilled, 'XData', position(1), 'YData', position(2), 'ZData', position(3));
             else
                 set(obj.UASkilled, ...
+                    'XData', [xData, position(1)], ...
+                    'YData', [yData, position(2)], ...
+                    'ZData', [zData, position(3)]);
+            end
+        end
+        
+        function animateUASmissed(obj, position)
+            xData = get(obj.UASmissed, 'XData');
+            yData = get(obj.UASmissed, 'YData');
+            zData = get(obj.UASmissed, 'ZData');
+        
+            if isscalar(xData) && isnan(xData)
+                set(obj.UASmissed, 'XData', position(1), 'YData', position(2), 'ZData', position(3));
+            else
+                set(obj.UASmissed, ...
                     'XData', [xData, position(1)], ...
                     'YData', [yData, position(2)], ...
                     'ZData', [zData, position(3)]);
